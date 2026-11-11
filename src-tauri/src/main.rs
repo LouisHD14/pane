@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod apps;
+mod claude;
+mod http;
 mod media;
 mod status;
 mod tray;
@@ -13,7 +15,6 @@ use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
-use tauri::window::{Color, Effect, EffectsBuilder};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -22,6 +23,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ES
 
 /// Bar height in logical pixels, the same as the Windows 11 taskbar.
 const BAR_HEIGHT: f64 = 48.0;
+/// The bar floats this far (logical px) from the screen edges and from maximized windows above it.
+const GAP: f64 = 6.0;
+/// Glass tint 0xAABBGGRR: a dark blue-grey covering ~25 % of the blur, so the background shines through.
+const GLASS_TINT: u32 = 0x40_1A_12_10;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// True while Pane is shown and the Windows taskbar is hidden. Changed only on the main thread.
@@ -51,6 +56,7 @@ fn set_shown(app: &AppHandle, show: bool) {
     if show {
         win::hide_taskbar(&dir);
         place_bars(app, true);
+        let _ = app.emit("shown", ()); // plays the bar's entrance animation
         // Tray icons come to Pane only while it is shown; Explorer gets every message too.
         let h = app.clone();
         tray::start(move || push_tray(&h));
@@ -88,9 +94,11 @@ fn place_bars(app: &AppHandle, show: bool) {
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            let rc = win::reserve_edge(hwnd, bar.monitor, bar.height);
-            let _ = window.set_position(PhysicalPosition::new(rc.left, rc.top));
-            let _ = window.set_size(PhysicalSize::new((rc.right - rc.left) as u32, bar.height as u32));
+            // Reserve bar + a gap above and below, then float the bar inside with the gap on all sides.
+            let gap = (bar.height as f64 * GAP / BAR_HEIGHT).round() as i32;
+            let rc = win::reserve_edge(hwnd, bar.monitor, bar.height + 2 * gap);
+            let _ = window.set_position(PhysicalPosition::new(rc.left + gap, rc.top + gap));
+            let _ = window.set_size(PhysicalSize::new((rc.right - rc.left - 2 * gap) as u32, bar.height as u32));
             if !bar.fullscreen {
                 let _ = window.show();
             }
@@ -119,19 +127,18 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
     let mut new = Vec::new();
     for (i, (monitor, height)) in monitor_rects(app).into_iter().enumerate() {
         let label = format!("bar-{generation}-{i}");
-        WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Pane")
             .decorations(false)
             .transparent(true)
-            .shadow(false)
+            .shadow(true)
             .resizable(false)
             .skip_taskbar(true)
             .always_on_top(true)
             .focused(false)
             .visible(false)
-            // Dark, see-through acrylic tint (the default tint is a flat light grey).
-            .effects(EffectsBuilder::new().effect(Effect::Acrylic).color(Color(16, 18, 26, 140)).build())
             .build()?;
+        win::set_glass(HWND(window.hwnd()?.0), GLASS_TINT);
         new.push(Bar { label, monitor, height, fullscreen: false });
     }
     *bars(app) = new;
@@ -197,6 +204,19 @@ fn usage_loop(app: AppHandle) {
             let _ = app.emit("usage", usage::sample());
         }
         std::thread::sleep(Duration::from_secs(1));
+    });
+}
+
+/// Last Claude usage (None until the first fetch is done).
+static CLAUDE: Mutex<Option<claude::ClaudeUsage>> = Mutex::new(None);
+
+/// Claude plan limits every 5 minutes, sent to the bars.
+fn claude_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        let now = claude::fetch();
+        *CLAUDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(now.clone());
+        let _ = app.emit("claude", now);
+        std::thread::sleep(Duration::from_secs(5 * 60));
     });
 }
 
@@ -345,6 +365,16 @@ fn get_weather() -> Option<weather::Weather> {
 }
 
 #[tauri::command]
+fn get_claude() -> Option<claude::ClaudeUsage> {
+    CLAUDE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+fn open_claude_usage() {
+    win::open("https://claude.ai/settings/usage");
+}
+
+#[tauri::command]
 fn open_volume_mixer() {
     win::open("ms-settings:apps-volume");
 }
@@ -376,16 +406,20 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
     let label = format!("overflow-{}", window.label());
     let popup = match app.get_webview_window(&label) {
         Some(popup) => popup,
-        None => WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
-            .title("Pane")
-            .decorations(false)
-            .transparent(true)
-            .resizable(false)
-            .skip_taskbar(true)
-            .always_on_top(true)
-            .visible(false)
-            .effects(EffectsBuilder::new().effect(Effect::Acrylic).color(Color(16, 18, 26, 170)).build())
-            .build()?,
+        None => {
+            let popup = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+                .title("Pane")
+                .decorations(false)
+                .transparent(true)
+                .shadow(true)
+                .resizable(false)
+                .skip_taskbar(true)
+                .always_on_top(true)
+                .visible(false)
+                .build()?;
+            win::set_glass(HWND(popup.hwnd()?.0), GLASS_TINT);
+            popup
+        }
     };
     // Grid of 40 px cells, 5 per row, 8 px padding (same as the CSS).
     let count = tray::list().iter().filter(|t| !t.promoted).count().max(1);
@@ -467,6 +501,8 @@ fn main() {
             get_weather,
             open_widgets,
             open_volume_mixer,
+            get_claude,
+            open_claude_usage,
             open_task_manager,
             get_tray,
             tray_click,
@@ -484,6 +520,7 @@ fn main() {
             status_loop(handle.clone());
             weather_loop(handle.clone());
             usage_loop(handle.clone());
+            claude_loop(handle.clone());
             let m = handle.clone();
             media::watch(move || {
                 let _ = m.emit("media", media::current());

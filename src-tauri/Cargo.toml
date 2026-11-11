@@ -1,6 +1,6 @@
 [package]
 name = "pane"
-version = "0.5.0"
+version = "0.6.0"
 description = "Own Windows 11 taskbar replacement with widgets"
 edition = "2021"
 
@@ -25,6 +25,7 @@ features = [
   "Media_Control",
   "Storage_Streams",
   "Web_Http",
+  "Web_Http_Headers",
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
