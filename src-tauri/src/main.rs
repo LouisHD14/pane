@@ -1,13 +1,17 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod apps;
+mod status;
 mod win;
 
 use std::os::windows::process::CommandExt;
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tauri::window::{Color, Effect, EffectsBuilder};
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::ShortcutState;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_LWIN};
@@ -18,13 +22,21 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// True while Pane is shown and the Windows taskbar is hidden. Changed only on the main thread.
 static SHOWN: AtomicBool = AtomicBool::new(false);
+/// Makes window labels unique when the bars are rebuilt after a monitor change.
+static GENERATION: AtomicUsize = AtomicUsize::new(0);
 
 struct Bar {
     label: String,
     monitor: RECT,
     height: i32,
+    /// Hidden because a fullscreen app (game, video) is in front on this monitor.
+    fullscreen: bool,
 }
-struct Bars(Vec<Bar>);
+struct Bars(Mutex<Vec<Bar>>);
+
+fn bars(app: &AppHandle) -> MutexGuard<'_, Vec<Bar>> {
+    app.state::<Bars>().inner().0.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Shows or hides Pane and swaps the Windows taskbar the other way. Main thread only.
 fn set_shown(app: &AppHandle, show: bool) {
@@ -39,10 +51,9 @@ fn set_shown(app: &AppHandle, show: bool) {
         let handle = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(1500));
-            let h = handle.clone();
-            let _ = handle.run_on_main_thread(move || {
+            on_main(&handle, |h| {
                 if SHOWN.load(SeqCst) {
-                    place_bars(&h, true);
+                    place_bars(h, true);
                 }
             });
         });
@@ -52,14 +63,19 @@ fn set_shown(app: &AppHandle, show: bool) {
     }
 }
 
-/// Runs `set_shown` on the main thread, where window calls can't deadlock.
-fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
+/// Runs `f` on the main thread, where window calls can't deadlock.
+fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || set_shown(&handle, show(SHOWN.load(SeqCst))));
+    let _ = app.run_on_main_thread(move || f(&handle));
 }
 
+fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
+    on_main(app, move |h| set_shown(h, show(SHOWN.load(SeqCst))));
+}
+
+/// Main thread only.
 fn place_bars(app: &AppHandle, show: bool) {
-    for bar in &app.state::<Bars>().0 {
+    for bar in bars(app).iter() {
         let Some(window) = app.get_webview_window(&bar.label) else { continue };
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
@@ -67,7 +83,9 @@ fn place_bars(app: &AppHandle, show: bool) {
             let rc = win::reserve_edge(hwnd, bar.monitor, bar.height);
             let _ = window.set_position(PhysicalPosition::new(rc.left, rc.top));
             let _ = window.set_size(PhysicalSize::new((rc.right - rc.left) as u32, bar.height as u32));
-            let _ = window.show();
+            if !bar.fullscreen {
+                let _ = window.show();
+            }
         } else {
             win::release_edge(hwnd);
             let _ = window.hide();
@@ -75,11 +93,24 @@ fn place_bars(app: &AppHandle, show: bool) {
     }
 }
 
-// shortcut: one bar per monitor found at start; plugging monitors in/out needs a restart until Phase 2.
-fn create_bars(app: &tauri::App) -> tauri::Result<()> {
-    let mut bars = Vec::new();
-    for (i, monitor) in app.available_monitors()?.iter().enumerate() {
-        let label = format!("bar-{i}");
+fn monitor_rects(app: &AppHandle) -> Vec<(RECT, i32)> {
+    let monitors = app.available_monitors().unwrap_or_default();
+    monitors
+        .iter()
+        .map(|m| {
+            let (pos, size) = (m.position(), m.size());
+            let rect = RECT { left: pos.x, top: pos.y, right: pos.x + size.width as i32, bottom: pos.y + size.height as i32 };
+            (rect, (BAR_HEIGHT * m.scale_factor()).round() as i32)
+        })
+        .collect()
+}
+
+/// One bar window per monitor. Main thread only.
+fn create_bars(app: &AppHandle) -> tauri::Result<()> {
+    let generation = GENERATION.fetch_add(1, SeqCst);
+    let mut new = Vec::new();
+    for (i, (monitor, height)) in monitor_rects(app).into_iter().enumerate() {
+        let label = format!("bar-{generation}-{i}");
         WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Pane")
             .decorations(false)
@@ -93,15 +124,59 @@ fn create_bars(app: &tauri::App) -> tauri::Result<()> {
             // Dark, see-through acrylic tint (the default tint is a flat light grey).
             .effects(EffectsBuilder::new().effect(Effect::Acrylic).color(Color(16, 18, 26, 140)).build())
             .build()?;
-        let (pos, size) = (monitor.position(), monitor.size());
-        bars.push(Bar {
-            label,
-            monitor: RECT { left: pos.x, top: pos.y, right: pos.x + size.width as i32, bottom: pos.y + size.height as i32 },
-            height: (BAR_HEIGHT * monitor.scale_factor()).round() as i32,
-        });
+        new.push(Bar { label, monitor, height, fullscreen: false });
     }
-    app.manage(Bars(bars));
+    *bars(app) = new;
     Ok(())
+}
+
+/// Monitors were plugged in/out or changed resolution: replace all bars. Main thread only.
+fn rebuild_bars(app: &AppHandle) {
+    let old: Vec<String> = bars(app).iter().map(|b| b.label.clone()).collect();
+    for label in old {
+        if let Some(window) = app.get_webview_window(&label) {
+            if let Ok(hwnd) = window.hwnd() {
+                win::release_edge(HWND(hwnd.0));
+            }
+            let _ = window.destroy();
+        }
+    }
+    if let Err(e) = create_bars(app) {
+        eprintln!("pane: can't rebuild bars: {e}");
+    }
+    if SHOWN.load(SeqCst) {
+        place_bars(app, true);
+    }
+}
+
+/// Hides the bar on monitors where a fullscreen app is in front, shows it again afterwards.
+fn check_fullscreen(app: &AppHandle) {
+    if !SHOWN.load(SeqCst) {
+        return;
+    }
+    let changes: Vec<(String, bool)> = bars(app)
+        .iter_mut()
+        .filter_map(|bar| {
+            let fullscreen = win::fullscreen_on(bar.monitor);
+            (fullscreen != bar.fullscreen).then(|| {
+                bar.fullscreen = fullscreen;
+                (bar.label.clone(), fullscreen)
+            })
+        })
+        .collect();
+    for (label, fullscreen) in changes {
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = if fullscreen { window.hide() } else { window.show() };
+        }
+    }
+}
+
+/// Sends each bar the apps of its own monitor.
+fn push_apps(app: &AppHandle) {
+    let targets: Vec<(String, RECT)> = bars(app).iter().map(|b| (b.label.clone(), b.monitor)).collect();
+    for (label, monitor) in targets {
+        let _ = app.emit_to(label.as_str(), "apps", apps::list(monitor));
+    }
 }
 
 /// Starts `Pane.exe --watchdog <pid>`: it waits until this process ends (also by crash or Task Manager)
@@ -114,9 +189,9 @@ fn start_watchdog() {
     }
 }
 
-/// Explorer sometimes shows its taskbar again, and after an Explorer restart it forgets Pane's screen edges.
-// shortcut: checks once a second instead of listening for the TaskbarCreated message; fine until Phase 3 adds the tray window.
-fn keep_taskbar_hidden(app: AppHandle) {
+/// Once a second: keep Explorer's taskbar hidden, notice Explorer restarts, monitor changes and fullscreen apps.
+// shortcut: polling instead of TaskbarCreated / WM_DISPLAYCHANGE messages; costs ~0 CPU, fine until Phase 3 adds a message window.
+fn watch_loop(app: AppHandle) {
     std::thread::spawn(move || {
         let mut tray = win::tray_id();
         loop {
@@ -128,9 +203,32 @@ fn keep_taskbar_hidden(app: AppHandle) {
             let now = win::tray_id();
             if now != tray {
                 tray = now;
-                let handle = app.clone();
-                let _ = app.run_on_main_thread(move || place_bars(&handle, true));
+                on_main(&app, |h| place_bars(h, true));
             }
+            let current = monitor_rects(&app);
+            let known: Vec<(RECT, i32)> = bars(&app).iter().map(|b| (b.monitor, b.height)).collect();
+            if current != known {
+                on_main(&app, |h| {
+                    rebuild_bars(h);
+                    push_apps(h);
+                });
+            }
+            check_fullscreen(&app);
+        }
+    });
+}
+
+/// Sends the status icons' state to all bars when it changes.
+fn status_loop(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last = None;
+        loop {
+            let now = status::read();
+            if last.as_ref() != Some(&now) {
+                let _ = app.emit("status", &now);
+                last = Some(now);
+            }
+            std::thread::sleep(Duration::from_secs(2));
         }
     });
 }
@@ -146,6 +244,11 @@ fn open_notifications() {
 }
 
 #[tauri::command]
+fn open_quick_settings() {
+    win::press(&[VK_LWIN, VIRTUAL_KEY(b'A' as u16)]);
+}
+
+#[tauri::command]
 fn toggle(app: AppHandle) {
     request(&app, |shown| !shown);
 }
@@ -153,6 +256,47 @@ fn toggle(app: AppHandle) {
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0); // RunEvent::Exit below brings the taskbar back
+}
+
+/// The apps for the bar that asks (each bar shows its own monitor's windows).
+#[tauri::command]
+async fn get_apps(app: AppHandle, window: WebviewWindow) -> Vec<apps::AppItem> {
+    let monitor = bars(&app).iter().find(|b| b.label == window.label()).map(|b| b.monitor);
+    monitor.map(apps::list).unwrap_or_default()
+}
+
+#[tauri::command]
+async fn get_status() -> status::Status {
+    status::read()
+}
+
+#[tauri::command]
+fn activate(hwnd: isize) {
+    apps::activate(hwnd);
+}
+
+#[tauri::command]
+fn close_window(hwnd: isize) {
+    apps::close(hwnd);
+}
+
+#[tauri::command]
+async fn launch(id: String) {
+    apps::launch(&id);
+}
+
+#[tauri::command]
+fn autostart(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, on: bool) {
+    let launcher = app.autolaunch();
+    let result = if on { launcher.enable() } else { launcher.disable() };
+    if let Err(e) = result {
+        eprintln!("pane: can't change autostart: {e}");
+    }
 }
 
 fn main() {
@@ -183,12 +327,35 @@ fn main() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![open_start, open_notifications, toggle, quit])
+        // "Start with Windows" (HKCU Run key, off until the user turns it on).
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .manage(Bars(Mutex::new(Vec::new())))
+        .invoke_handler(tauri::generate_handler![
+            open_start,
+            open_notifications,
+            open_quick_settings,
+            toggle,
+            quit,
+            get_apps,
+            get_status,
+            activate,
+            close_window,
+            launch,
+            autostart,
+            set_autostart
+        ])
         .setup(|app| {
-            create_bars(app)?;
+            let handle = app.handle().clone();
+            create_bars(&handle)?;
             start_watchdog();
-            set_shown(app.handle(), true);
-            keep_taskbar_hidden(app.handle().clone());
+            set_shown(&handle, true);
+            watch_loop(handle.clone());
+            status_loop(handle.clone());
+            let h = handle.clone();
+            apps::watch(move || {
+                push_apps(&h);
+                check_fullscreen(&h);
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
