@@ -3,7 +3,10 @@
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::fs;
-use windows::core::{w, HSTRING, PCWSTR};
+use std::mem::size_of_val;
+use windows::core::{s, w, HSTRING, PCWSTR};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -143,6 +146,45 @@ pub fn reserve_edge(hwnd: HWND, monitor: RECT, height: i32) -> RECT {
 
 pub fn release_edge(hwnd: HWND) {
     unsafe { SHAppBarMessage(ABM_REMOVE, &mut appbar(hwnd)) };
+}
+
+/// Blurred, tinted glass behind a window that stays on when the window isn't focused.
+/// Windows 11's own Mica/Acrylic backdrops turn flat grey on inactive windows, and Pane's bar is never
+/// the active window, so this uses the older accent policy (the same call TranslucentTB uses).
+/// `tint` is 0xAABBGGRR: alpha = how much tint covers the blur.
+// shortcut: SetWindowCompositionAttribute is undocumented; if Windows drops it the bar is just transparent.
+pub fn set_glass(hwnd: HWND, tint: u32) {
+    #[repr(C)]
+    struct AccentPolicy {
+        state: u32,
+        flags: u32,
+        gradient: u32,
+        animation: u32,
+    }
+    #[repr(C)]
+    struct Attribute {
+        kind: u32,
+        data: *mut std::ffi::c_void,
+        size: usize,
+    }
+    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+    const WCA_ACCENT_POLICY: u32 = 19;
+    type SetWindowCompositionAttribute = unsafe extern "system" fn(HWND, *mut Attribute) -> i32;
+    unsafe {
+        let Ok(user32) = GetModuleHandleW(w!("user32.dll")) else { return };
+        let Some(proc) = GetProcAddress(user32, s!("SetWindowCompositionAttribute")) else { return };
+        let set: SetWindowCompositionAttribute = std::mem::transmute(proc);
+        let mut accent = AccentPolicy { state: ACCENT_ENABLE_ACRYLICBLURBEHIND, flags: 0, gradient: tint, animation: 0 };
+        let mut attribute = Attribute {
+            kind: WCA_ACCENT_POLICY,
+            data: &mut accent as *mut _ as _,
+            size: size_of::<AccentPolicy>(),
+        };
+        set(hwnd, &mut attribute);
+        // Windows 11 rounded corners also for borderless windows; they clip the glass too.
+        let round = DWMWCP_ROUND;
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &round as *const _ as _, size_of_val(&round) as u32);
+    }
 }
 
 /// Opens a file, app or URI like double-clicking it, e.g. "ms-settings:apps-volume".
