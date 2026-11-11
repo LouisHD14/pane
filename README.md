@@ -13,6 +13,7 @@ Own taskbar for Windows 11: a glass bar at the bottom of every monitor with Star
 - **Status and clock:** the network icon opens Quick Settings, the volume icon the per-app volume mixer, the clock notifications and the calendar.
 - **Start with Windows:** right-click the bar → "Start with Windows".
 - **Hide / show:** Ctrl+Alt+P, or right-click the bar → "Hide Pane". The Windows taskbar comes back while Pane is hidden.
+- **Updates:** Pane checks GitHub releases 30 s after start and every 6 hours. A new version shows an "Update x.y.z" pill on the left; click it to install (the Windows taskbar comes back while the installer runs, then the new Pane starts). Right-click the bar → "Check for updates" to check now.
 - **Quit:** right-click the bar → "Quit Pane".
 - **Uninstall:** Settings → Apps → Installed apps → Pane → Uninstall. The taskbar comes back as it was.
 - **If the taskbar ever stays hidden:** run `"%LOCALAPPDATA%\Pane\pane.exe" --restore`.
@@ -28,6 +29,13 @@ cd src-tauri && cargo test
 ```
 
 Build with `npx tauri build`, not `cargo build --release`: plain cargo makes an exe that loads the UI from the dev server and shows an empty bar.
+
+## Release
+Needs the updater key at `%USERPROFILE%\.tauri\pane-updater.key` (see `CLAUDE.md`).
+
+1. `tools/release.ps1 -Version x.y.z -Notes "What changed"`: bumps the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, builds the signed installer and writes `latest.json` next to it.
+2. Commit and merge the version bump to `main`.
+3. Run the `gh release create ...` command the script prints. Don't mark the release as prerelease: Pane reads `releases/latest/download/latest.json`, and GitHub's "latest" skips prereleases.
 
 ## Check
 - `tools/smoke-test.ps1 -Exe <pane.exe>`: starts Pane, checks the taskbar is hidden, kills Pane hard, checks the watchdog brings the taskbar back. Prints RAM and idle CPU.
@@ -52,6 +60,7 @@ src-tauri/src/weather.rs  Windows location + Open-Meteo
 src-tauri/src/usage.rs    CPU / GPU / RAM load and network speed
 src-tauri/src/claude.rs   Claude plan limits (Claude Code login) or local token count
 src-tauri/src/http.rs     Small HTTPS GET (WinRT)
+src-tauri/src/update.rs   Auto-update from GitHub releases
 src-tauri/windows/        Uninstaller hook (closes Pane, restores the taskbar)
-tools/                    Test scripts
+tools/                    Test scripts, release.ps1
 ```
