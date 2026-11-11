@@ -3,6 +3,8 @@
 
 mod apps;
 mod status;
+#[allow(dead_code)] // not wired into the UI yet
+mod tray;
 mod win;
 
 use std::os::windows::process::CommandExt;
