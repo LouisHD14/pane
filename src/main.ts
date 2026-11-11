@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Menu, type MenuItemOptions, type CheckMenuItemOptions, type PredefinedMenuItemOptions } from "@tauri-apps/api/menu";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { renderStatus, type Status } from "./status";
+import { renderTray, type TrayIcon } from "./tray";
 
 type WinItem = { hwnd: number; title: string; active: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
@@ -10,46 +11,92 @@ type Item = MenuItemOptions | CheckMenuItemOptions | PredefinedMenuItemOptions;
 const me = getCurrentWebviewWindow();
 const $ = (id: string) => document.getElementById(id)!;
 
-// --- Clock: Windows locale decides the format, e.g. "Mi., 11. Nov." / "Wed, Nov 11".
-const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" });
-const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+// The "hidden icons" popup loads the same page; its window label tells it apart from a bar.
+if (me.label.startsWith("overflow-")) overflowPage();
+else barPage();
 
-function tick() {
-  const now = new Date();
-  $("date").textContent = dateFmt.format(now);
-  $("time").textContent = timeFmt.format(now);
-  // Wake up again right after the next full minute, not every second.
-  setTimeout(tick, 60_000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50);
+/** Popup above the ^ arrow with the tray icons that aren't promoted to the bar. */
+function overflowPage() {
+  document.body.classList.add("overflow");
+  document.body.replaceChildren(Object.assign(document.createElement("div"), { id: "hidden-icons", className: "hidden-icons" }));
+  const show = (icons: TrayIcon[]) => renderTray($("hidden-icons"), icons.filter((t) => !t.promoted));
+  invoke<TrayIcon[]>("get_tray").then(show);
+  me.listen<TrayIcon[]>("tray", (e) => show(e.payload));
+  // Close like a Windows flyout: when focus goes elsewhere (also when an app opens its tray menu).
+  window.addEventListener("blur", () => invoke("close_overflow"));
+  document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("close_overflow"));
 }
-tick();
 
-// --- Apps: pinned + running, each bar shows the windows on its own monitor.
-let apps: AppItem[] = [];
+function barPage() {
+  // --- Clock: Windows locale decides the format, e.g. "Mi., 11. Nov." / "Wed, Nov 11".
+  const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" });
+  const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+  const tick = () => {
+    const now = new Date();
+    $("date").textContent = dateFmt.format(now);
+    $("time").textContent = timeFmt.format(now);
+    // Wake up again right after the next full minute, not every second.
+    setTimeout(tick, 60_000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50);
+  };
+  tick();
 
-function renderApps(list: AppItem[]) {
-  apps = list;
-  const box = $("apps");
-  box.replaceChildren(
-    ...list.map((app) => {
-      const b = document.createElement("button");
-      b.className = "app";
-      b.dataset.id = app.id;
-      b.title = app.windows.length === 1 ? app.windows[0].title : app.name;
-      b.setAttribute("aria-label", app.name);
-      b.classList.toggle("running", app.windows.length > 0);
-      b.classList.toggle("active", app.windows.some((w) => w.active));
-      if (app.icon) {
-        const img = document.createElement("img");
-        img.src = app.icon;
-        img.alt = "";
-        b.append(img);
-      } else {
-        b.textContent = app.name.slice(0, 1).toUpperCase();
-      }
-      b.addEventListener("click", () => clickApp(app));
-      return b;
-    }),
-  );
+  // --- Apps: pinned + running, each bar shows the windows on its own monitor.
+  let apps: AppItem[] = [];
+  const renderApps = (list: AppItem[]) => {
+    apps = list;
+    $("apps").replaceChildren(...list.map(appButton));
+  };
+  invoke<AppItem[]>("get_apps").then(renderApps);
+  me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
+
+  // --- Tray: promoted icons on the bar, the rest behind the ^ arrow.
+  const showTray = (icons: TrayIcon[]) => {
+    renderTray($("tray"), icons.filter((t) => t.promoted));
+    $("overflow").hidden = !icons.some((t) => !t.promoted);
+  };
+  invoke<TrayIcon[]>("get_tray").then(showTray);
+  me.listen<TrayIcon[]>("tray", (e) => showTray(e.payload));
+  $("overflow").addEventListener("click", () => {
+    const r = $("overflow").getBoundingClientRect();
+    invoke("open_overflow", { clientX: r.left + r.width / 2 });
+  });
+
+  // --- Status icons (network, volume, battery) open Windows Quick Settings.
+  invoke<Status>("get_status").then((s) => renderStatus($("status"), s));
+  me.listen<Status>("status", (e) => renderStatus($("status"), e.payload));
+
+  $("start").addEventListener("click", () => invoke("open_start"));
+  $("status").addEventListener("click", () => invoke("open_quick_settings"));
+  $("clock").addEventListener("click", () => invoke("open_notifications"));
+
+  // --- Right-click: app menu on an app icon, Pane menu everywhere else (tray icons handle their own).
+  document.addEventListener("contextmenu", async (e) => {
+    e.preventDefault();
+    const id = (e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
+    const app = apps.find((a) => a.id === id);
+    const menu = await Menu.new({ items: app ? appMenu(app) : await paneMenu() });
+    await menu.popup();
+  });
+}
+
+function appButton(app: AppItem) {
+  const b = document.createElement("button");
+  b.className = "app";
+  b.dataset.id = app.id;
+  b.title = app.windows.length === 1 ? app.windows[0].title : app.name;
+  b.setAttribute("aria-label", app.name);
+  b.classList.toggle("running", app.windows.length > 0);
+  b.classList.toggle("active", app.windows.some((w) => w.active));
+  if (app.icon) {
+    const img = document.createElement("img");
+    img.src = app.icon;
+    img.alt = "";
+    b.append(img);
+  } else {
+    b.textContent = app.name.slice(0, 1).toUpperCase();
+  }
+  b.addEventListener("click", () => clickApp(app));
+  return b;
 }
 
 /** No window: start it. One window: front / minimize. Several: cycle through them. */
@@ -60,26 +107,6 @@ function clickApp(app: AppItem) {
   const next = wins.length === 1 ? wins[0] : wins[(i + 1) % wins.length];
   invoke("activate", { hwnd: next.hwnd });
 }
-
-invoke<AppItem[]>("get_apps").then(renderApps);
-me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
-
-// --- Status icons (network, volume, battery) open Windows Quick Settings.
-invoke<Status>("get_status").then((s) => renderStatus($("status"), s));
-me.listen<Status>("status", (e) => renderStatus($("status"), e.payload));
-
-$("start").addEventListener("click", () => invoke("open_start"));
-$("status").addEventListener("click", () => invoke("open_quick_settings"));
-$("clock").addEventListener("click", () => invoke("open_notifications"));
-
-// --- Right-click: app menu on an app icon, Pane menu everywhere else.
-document.addEventListener("contextmenu", async (e) => {
-  e.preventDefault();
-  const id = (e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
-  const app = apps.find((a) => a.id === id);
-  const menu = await Menu.new({ items: app ? appMenu(app) : await paneMenu() });
-  await menu.popup();
-});
 
 function appMenu(app: AppItem): Item[] {
   const items: Item[] = app.windows.map((w) => ({ text: w.title, action: () => invoke("activate", { hwnd: w.hwnd }) }));
