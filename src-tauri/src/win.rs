@@ -14,7 +14,7 @@ use windows::Win32::UI::Shell::{
     ABS_AUTOHIDE, APPBARDATA,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, FindWindowW, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
+    FindWindowExW, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
     IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNA,
 };
 
@@ -46,8 +46,19 @@ fn appbar(hwnd: HWND) -> APPBARDATA {
     APPBARDATA { cbSize: size_of::<APPBARDATA>() as u32, hWnd: hwnd, ..Default::default() }
 }
 
-fn tray() -> Option<HWND> {
-    unsafe { FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).ok() }
+/// Explorer's main taskbar window; skips Pane's own `Shell_TrayWnd` (the tray icon host in tray.rs).
+pub fn tray() -> Option<HWND> {
+    let me = std::process::id();
+    let mut prev = None;
+    while let Ok(h) = unsafe { FindWindowExW(None, prev, w!("Shell_TrayWnd"), PCWSTR::null()) } {
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        if pid != me {
+            return Some(h);
+        }
+        prev = Some(h);
+    }
+    None
 }
 
 /// Changes when Explorer restarts (new taskbar window).

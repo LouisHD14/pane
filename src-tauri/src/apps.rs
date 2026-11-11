@@ -346,7 +346,7 @@ fn monitor_of(h: HWND) -> RECT {
     }
 }
 
-fn exe_of(pid: u32) -> String {
+pub(crate) fn exe_of(pid: u32) -> String {
     unsafe {
         let Ok(p) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return String::new() };
         let mut buf = [0u16; 1024];
@@ -486,15 +486,19 @@ fn icon(factory: &IShellItemImageFactory) -> String {
     let Ok(bmp) = (unsafe { factory.GetImage(SIZE { cx: ICON_PX, cy: ICON_PX }, SIIGBF_ICONONLY) }) else {
         return String::new();
     };
-    let png = bgra(bmp).and_then(|(w, h, px)| encode_png(w, h, &px));
+    let png = pixels(bmp).and_then(|(w, h, px)| encode_png(w, h, &to_rgba(px)));
     unsafe {
         let _ = DeleteObject(bmp.into());
     }
-    png.map_or(String::new(), |p| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(p)))
+    png.map_or(String::new(), data_url)
 }
 
-/// Pixels of a 32-bit bitmap, top row first, as straight (not premultiplied) RGBA.
-fn bgra(bmp: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn data_url(png: Vec<u8>) -> String {
+    format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png))
+}
+
+/// Pixels of a bitmap as 32-bit BGRA, top row first.
+pub(crate) fn pixels(bmp: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
     unsafe {
         let mut info = BITMAP::default();
         GetObjectW(bmp.into(), size_of::<BITMAP>() as i32, Some(&mut info as *mut _ as _));
@@ -515,7 +519,7 @@ fn bgra(bmp: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
         if rows != h || w == 0 {
             return None;
         }
-        Some((w as u32, h as u32, to_rgba(px)))
+        Some((w as u32, h as u32, px))
     }
 }
 
@@ -536,7 +540,7 @@ fn to_rgba(mut px: Vec<u8>) -> Vec<u8> {
     px
 }
 
-fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut enc = png::Encoder::new(&mut out, w, h);
     enc.set_color(png::ColorType::Rgba);

@@ -1,6 +1,6 @@
 [package]
 name = "pane"
-version = "0.2.0"
+version = "0.3.0"
 description = "Own Windows 11 taskbar replacement with widgets"
 edition = "2021"
 
@@ -31,6 +31,8 @@ features = [
   "Win32_Storage_Packaging_Appx",
   "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
   "Win32_System_Power",
   "Win32_System_Registry",
   "Win32_System_Threading",
