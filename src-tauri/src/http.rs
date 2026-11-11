@@ -1,28 +1,33 @@
-//! Tiny blocking HTTPS GET over the WinRT HttpClient (no extra crates).
+//! Tiny blocking HTTPS GET with `ureq` (rustls, its own TLS).
+//! Windows' WinRT HttpClient failed Open-Meteo with 0x80072F8F on the user's PC while Windows' own
+//! curl reached it fine (2026-11-11), so Pane doesn't depend on that client any more.
 
-use windows::core::HSTRING;
-use windows::Foundation::Uri;
-use windows::Web::Http::HttpClient;
+use std::sync::OnceLock;
+use std::time::Duration;
 
-/// Blocking GET; Ok(body) on 2xx, Err("HTTP <code>") or Err("network error 0x...").
-/// Errors never contain the URL or header values, so tokens can't leak into logs.
-// shortcut: no request timeout (WinRT default), add a cancel timer if a fetch ever hangs its thread.
+fn agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build().into())
+}
+
+/// Blocking GET; Ok(body) on 2xx, else a short reason ("HTTP 401", "timeout", ...).
+/// Errors never contain the URL or header values, so tokens can't leak into the log.
 pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<String, String> {
-    let (status, body) = (|| {
-        let client = HttpClient::new()?;
-        let h = client.DefaultRequestHeaders()?;
-        for (k, v) in headers {
-            h.TryAppendWithoutValidation(&HSTRING::from(*k), &HSTRING::from(*v))?;
-        }
-        let resp = client.GetAsync(&Uri::CreateUri(&HSTRING::from(url))?)?.join()?;
-        let status = resp.StatusCode()?.0;
-        let body = resp.Content()?.ReadAsStringAsync()?.join()?;
-        Ok::<_, windows::core::Error>((status, body.to_string()))
-    })()
-    .map_err(|e| format!("network error 0x{:08X}", e.code().0))?;
-    if (200..300).contains(&status) {
-        Ok(body)
-    } else {
-        Err(format!("HTTP {status}"))
+    let mut request = agent().get(url);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let mut response = request.call().map_err(|e| reason(&e))?;
+    response.body_mut().read_to_string().map_err(|e| reason(&e))
+}
+
+fn reason(e: &ureq::Error) -> String {
+    match e {
+        ureq::Error::StatusCode(code) => format!("HTTP {code}"),
+        ureq::Error::Timeout(_) => "timeout".into(),
+        ureq::Error::HostNotFound => "host not found".into(),
+        ureq::Error::ConnectionFailed => "connection failed".into(),
+        ureq::Error::Io(io) => format!("network error ({:?})", io.kind()),
+        _ => "network error".into(),
     }
 }
