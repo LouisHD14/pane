@@ -103,6 +103,17 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
    - Option A: use Claude Code's local login (`~/.claude/.credentials.json`) to read the usage that `/usage` shows. Needs checking that this is reachable and stable.
    - Option B (fallback): Claude Code token totals from the local transcripts in `~/.claude/projects`.
    - Tokens stay local, read-only, never logged or sent anywhere else.
+   - **Built 2026-11-11** (v0.6.0), option A approved by the user. `claude.rs` (subagent): `GET https://api.anthropic.com/api/oauth/usage` with the Claude Code token (`anthropic-beta: oauth-2025-04-20`), reads `five_hour` / `seven_day` utilization + reset time, plan from the credentials file; every 5 min. Expired token / 401 → local token count of the last 5 h (B). Never refreshes or writes the credentials. `http.rs`: shared WinRT GET (also used by weather). Widget left next to Now Playing; click opens claude.ai/settings/usage.
+   - Checked on LOUISPC: "5h 46 %, 7d 64 %, resets 23:30 / Fri 07:00" on the bar. Undocumented endpoint: may change.
+   - v0.6.0 checks: kill, fullscreen, install → uninstall pass. RAM 149 MB private (glass layers + animations raise WebView2 GPU memory): **first job of Phase 7 is to bring it back under 100 MB.**
+
+### User feedback 2026-11-11 (after installing v0.5.0), fixed in v0.6.0
+- Date hover covered only the text → the whole date/time/weather block lights up.
+- No glass visible: Windows 11's Acrylic/Mica turn flat grey on inactive windows (the bar is never active) → accent-policy acrylic (stays on) + DWM rounded corners + CSS sheen.
+- Bar should float free → 6 px gap to the screen edges and above maximized windows.
+- Start icon too small/unclear → 24 px gradient glyph.
+- Animations for everything → entrance, hover/press, app pop in/out, sliding indicators, launch bounce, tray/popup, song change, gliding meters/progress; off with Windows' reduced motion.
+- Answers: floating style "full width with gaps"; Claude login OK; repo public + auto-update; no paid code signing.
 6. **Extras (picked by the user 2026-11-11):**
    - **CPU / GPU / RAM usage:** small % meters; CPU/RAM via `sysinfo`, GPU load via the Windows GPU performance counters (the ones Task Manager shows; works for the RTX 3060 without NVIDIA tools). Refresh every 2 s, paused while no monitor is on.
    - **Per-app volume:** click on the volume icon opens the Windows volume mixer (`ms-settings:apps-volume`), where every app's volume is set. Later maybe an own popup with sliders (Windows audio session API).
