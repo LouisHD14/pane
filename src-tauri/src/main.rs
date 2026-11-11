@@ -7,6 +7,7 @@ mod http;
 mod media;
 mod status;
 mod tray;
+mod update;
 mod usage;
 mod weather;
 mod win;
@@ -25,6 +26,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ES
 const BAR_HEIGHT: f64 = 48.0;
 /// The bar floats this far (logical px) from the screen edges and from maximized windows above it.
 const GAP: f64 = 6.0;
+/// WebView2 start options for every Pane window (all windows must use the same ones). Tauri's own
+/// defaults plus: one renderer process for all bars and the popup instead of one each (~30 MB each).
+const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site --renderer-process-limit=1";
 /// Glass tint 0xAABBGGRR: a dark blue-grey covering ~25 % of the blur, so the background shines through.
 const GLASS_TINT: u32 = 0x40_1A_12_10;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -83,6 +88,16 @@ fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
     let _ = app.run_on_main_thread(move || f(&handle));
 }
 
+/// `set_shown` from any thread, returning once the main thread has done it.
+fn shown_and_wait(app: &AppHandle, show: bool) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    on_main(app, move |h| {
+        set_shown(h, show);
+        let _ = tx.send(());
+    });
+    let _ = rx.recv();
+}
+
 fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
     on_main(app, move |h| set_shown(h, show(SHOWN.load(SeqCst))));
 }
@@ -129,6 +144,7 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
         let label = format!("bar-{generation}-{i}");
         let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Pane")
+            .additional_browser_args(BROWSER_ARGS)
             .decorations(false)
             .transparent(true)
             .shadow(false)
@@ -419,6 +435,7 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
         None => {
             let popup = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
                 .title("Pane")
+                .additional_browser_args(BROWSER_ARGS)
                 .decorations(false)
                 .transparent(true)
                 .shadow(false)
@@ -447,7 +464,8 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
 
 #[tauri::command]
 fn close_overflow(window: WebviewWindow) {
-    let _ = window.hide();
+    // Destroyed, not hidden: a hidden popup keeps its ~30 MB page alive. Reopening builds it again (~0.1 s).
+    let _ = window.destroy();
 }
 
 #[tauri::command]
@@ -462,6 +480,21 @@ fn set_autostart(app: AppHandle, on: bool) {
     if let Err(e) = result {
         crate::win::log(&format!("can't change autostart: {e}"));
     }
+}
+
+/// Manual check from the Pane menu: the new version, or None when Pane is up to date.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Option<String> {
+    update::check(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let result = update::install(&app).await;
+    if let Err(e) = &result {
+        crate::win::log(&format!("update failed: {e}"));
+    }
+    result
 }
 
 fn main() {
@@ -494,6 +527,7 @@ fn main() {
         )
         // "Start with Windows" (HKCU Run key, off until the user turns it on).
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Bars(Mutex::new(Vec::new())))
         .invoke_handler(tauri::generate_handler![
             open_start,
@@ -520,7 +554,9 @@ fn main() {
             open_overflow,
             close_overflow,
             autostart,
-            set_autostart
+            set_autostart,
+            check_update,
+            install_update
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -532,6 +568,7 @@ fn main() {
             weather_loop(handle.clone());
             usage_loop(handle.clone());
             claude_loop(handle.clone());
+            update::watch(handle.clone());
             let m = handle.clone();
             media::watch(move || {
                 let _ = m.emit("media", media::current());

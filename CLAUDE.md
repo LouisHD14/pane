@@ -20,4 +20,6 @@ Pane: own Windows 11 taskbar replacement with widgets (Tauri 2, Rust + TypeScrip
 - Processes Claude starts run in Claude's sandbox. Don't start the user's own Pane from Claude's shell; ask them to start it from the Start menu.
 - Errors go to `%LOCALAPPDATA%\org.gruening.pane\pane.log`: read it first when something doesn't show up.
 - Undecorated windows with `.shadow(true)` get invisible 7 px borders that shift the bar onto the next monitor: keep `shadow(false)`.
+- Updater signing key (Tauri updater signature, not code signing, no password): `%USERPROFILE%\.tauri\pane-updater.key`. Never commit it, never print it; only the public key is in `tauri.conf.json`. Losing it means installed Panes can't update any more (they reject other signatures).
+- Release: `tools/release.ps1 -Version x.y.z` bumps the versions, builds with the key and writes `latest.json`; it prints the `gh release create` command, which the user (or main session) runs. Never as prerelease (the endpoint is `releases/latest`).
 - See the bar: start the exe and screenshot the bottom of the screen. Inspect the page: start with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` and use the DevTools protocol (`http://127.0.0.1:9333/json`).
