@@ -42,8 +42,14 @@ function batteryIcon(b: NonNullable<Status["battery"]>): [string, string] {
   return [svg(body + bolt), `Battery ${b.percent} %${b.charging ? ", charging" : ""}`];
 }
 
+/** One button per icon: volume opens the per-app volume mixer, the others Quick Settings (`data-open`). */
 export function renderStatus(el: HTMLElement, s: Status) {
-  const parts = [networkIcon(s), volumeIcon(s), ...(s.battery ? [batteryIcon(s.battery)] : [])];
-  el.innerHTML = parts.map(([icon]) => icon).join("");
-  el.title = parts.map(([, label]) => label).join("\n");
+  const parts: [[string, string], string][] = [
+    [networkIcon(s), "quick-settings"],
+    [volumeIcon(s), "volume-mixer"],
+    ...(s.battery ? [[batteryIcon(s.battery), "quick-settings"] as [[string, string], string]] : []),
+  ];
+  el.innerHTML = parts
+    .map(([[icon, label], open]) => `<button data-open="${open}" title="${label}" aria-label="${label}">${icon}</button>`)
+    .join("");
 }

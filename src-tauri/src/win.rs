@@ -3,7 +3,7 @@
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::fs;
-use windows::core::{w, PCWSTR};
+use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -11,11 +11,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     SHAppBarMessage, ABE_BOTTOM, ABM_GETSTATE, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABM_SETSTATE,
-    ABS_AUTOHIDE, APPBARDATA,
+    ABS_AUTOHIDE, APPBARDATA, ShellExecuteW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
-    IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNA,
+    IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL,
 };
 
 /// Pane's data folder, %LOCALAPPDATA%\org.gruening.pane (the same one the uninstaller offers to delete).
@@ -143,6 +143,11 @@ pub fn reserve_edge(hwnd: HWND, monitor: RECT, height: i32) -> RECT {
 
 pub fn release_edge(hwnd: HWND) {
     unsafe { SHAppBarMessage(ABM_REMOVE, &mut appbar(hwnd)) };
+}
+
+/// Opens a file, app or URI like double-clicking it, e.g. "ms-settings:apps-volume".
+pub fn open(target: &str) {
+    unsafe { ShellExecuteW(None, w!("open"), &HSTRING::from(target), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
 }
 
 /// Presses the keys together and releases them in reverse order, e.g. Win+N.

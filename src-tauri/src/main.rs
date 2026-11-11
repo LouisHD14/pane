@@ -5,6 +5,7 @@ mod apps;
 mod media;
 mod status;
 mod tray;
+mod usage;
 mod weather;
 mod win;
 
@@ -17,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEven
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::ShortcutState;
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_LWIN};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_SHIFT};
 
 /// Bar height in logical pixels, the same as the Windows 11 taskbar.
 const BAR_HEIGHT: f64 = 48.0;
@@ -189,6 +190,16 @@ fn push_apps(app: &AppHandle) {
     }
 }
 
+/// CPU / GPU / RAM and network speed once a second, only while Pane is shown.
+fn usage_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        if SHOWN.load(SeqCst) {
+            let _ = app.emit("usage", usage::sample());
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    });
+}
+
 /// Last weather (None: no location, offline, or not fetched yet).
 static WEATHER: Mutex<Option<weather::Weather>> = Mutex::new(None);
 
@@ -334,6 +345,16 @@ fn get_weather() -> Option<weather::Weather> {
 }
 
 #[tauri::command]
+fn open_volume_mixer() {
+    win::open("ms-settings:apps-volume");
+}
+
+#[tauri::command]
+fn open_task_manager() {
+    win::press(&[VK_CONTROL, VK_SHIFT, VK_ESCAPE]);
+}
+
+#[tauri::command]
 fn open_widgets() {
     win::press(&[VK_LWIN, VIRTUAL_KEY(b'W' as u16)]);
 }
@@ -445,6 +466,8 @@ fn main() {
             media_control,
             get_weather,
             open_widgets,
+            open_volume_mixer,
+            open_task_manager,
             get_tray,
             tray_click,
             open_overflow,
@@ -460,6 +483,7 @@ fn main() {
             watch_loop(handle.clone());
             status_loop(handle.clone());
             weather_loop(handle.clone());
+            usage_loop(handle.clone());
             let m = handle.clone();
             media::watch(move || {
                 let _ = m.emit("media", media::current());

@@ -5,6 +5,7 @@ import { renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
 import { mountMedia, renderMedia, type NowPlaying } from "./media";
 import { renderWeather, type Weather } from "./weather";
+import { renderUsage, type Usage } from "./usage";
 
 type WinItem = { hwnd: number; title: string; active: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
@@ -78,7 +79,15 @@ function barPage() {
   me.listen<Status>("status", (e) => renderStatus($("status"), e.payload));
 
   $("start").addEventListener("click", () => invoke("open_start"));
-  $("status").addEventListener("click", () => invoke("open_quick_settings"));
+  $("status").addEventListener("click", (e) => {
+    const open = (e.target as HTMLElement).closest<HTMLElement>("[data-open]")?.dataset.open;
+    if (open === "volume-mixer") invoke("open_volume_mixer");
+    else if (open) invoke("open_quick_settings");
+  });
+
+  // --- CPU / GPU / RAM and network speed; a click opens Task Manager.
+  me.listen<Usage>("usage", (e) => renderUsage($("usage"), e.payload));
+  $("usage").addEventListener("click", () => invoke("open_task_manager"));
   $("clock").addEventListener("click", () => invoke("open_notifications"));
 
   // --- Right-click: app menu on an app icon, Pane menu everywhere else (tray icons handle their own).
