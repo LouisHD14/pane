@@ -2,6 +2,8 @@ param([string]$Setup)
 Add-Type -Name U -Namespace W -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr FindWindow(string c, string n); [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);'
 function Taskbar { [W.U]::IsWindowVisible([W.U]::FindWindow("Shell_TrayWnd", $null)) }
 $dir = "$env:LOCALAPPDATA\Pane"
+# The test ends with an uninstall: never run it over the user's own installation.
+if (Test-Path "$dir\pane.exe") { Write-Error "Pane is installed in $dir. Uninstall it first (this test would remove it)."; exit 1 }
 $key = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -eq "Pane" }
 
 Start-Process $Setup -ArgumentList "/S" -Wait
