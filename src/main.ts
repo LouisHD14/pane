@@ -7,6 +7,7 @@ import { mountMedia, renderMedia, type NowPlaying } from "./media";
 import { renderWeather, type Weather } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
+import { renderClaude, type ClaudeUsage } from "./claude";
 
 type WinItem = { hwnd: number; title: string; active: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
@@ -102,6 +103,11 @@ function barPage() {
   mountMedia($("media"));
   invoke<NowPlaying | null>("get_media").then((np) => renderMedia($("media"), np));
   me.listen<NowPlaying | null>("media", (e) => renderMedia($("media"), e.payload));
+
+  // --- Claude plan usage (5-hour and weekly limit); a click opens the usage page on claude.ai.
+  invoke<ClaudeUsage | null>("get_claude").then((u) => renderClaude($("claude"), u));
+  me.listen<ClaudeUsage | null>("claude", (e) => renderClaude($("claude"), e.payload));
+  $("claude").addEventListener("click", () => invoke("open_claude_usage"));
 
   // --- Weather under the time; a click opens the Windows Widgets board with the full forecast.
   invoke<Weather | null>("get_weather").then((w) => renderWeather($("weather"), w));

@@ -2,7 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod apps;
-#[allow(dead_code)]
 mod claude;
 mod http;
 mod media;
@@ -208,6 +207,19 @@ fn usage_loop(app: AppHandle) {
     });
 }
 
+/// Last Claude usage (None until the first fetch is done).
+static CLAUDE: Mutex<Option<claude::ClaudeUsage>> = Mutex::new(None);
+
+/// Claude plan limits every 5 minutes, sent to the bars.
+fn claude_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        let now = claude::fetch();
+        *CLAUDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(now.clone());
+        let _ = app.emit("claude", now);
+        std::thread::sleep(Duration::from_secs(5 * 60));
+    });
+}
+
 /// Last weather (None: no location, offline, or not fetched yet).
 static WEATHER: Mutex<Option<weather::Weather>> = Mutex::new(None);
 
@@ -353,6 +365,16 @@ fn get_weather() -> Option<weather::Weather> {
 }
 
 #[tauri::command]
+fn get_claude() -> Option<claude::ClaudeUsage> {
+    CLAUDE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+fn open_claude_usage() {
+    win::open("https://claude.ai/settings/usage");
+}
+
+#[tauri::command]
 fn open_volume_mixer() {
     win::open("ms-settings:apps-volume");
 }
@@ -479,6 +501,8 @@ fn main() {
             get_weather,
             open_widgets,
             open_volume_mixer,
+            get_claude,
+            open_claude_usage,
             open_task_manager,
             get_tray,
             tray_click,
@@ -496,6 +520,7 @@ fn main() {
             status_loop(handle.clone());
             weather_loop(handle.clone());
             usage_loop(handle.clone());
+            claude_loop(handle.clone());
             let m = handle.clone();
             media::watch(move || {
                 let _ = m.emit("media", media::current());

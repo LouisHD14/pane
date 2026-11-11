@@ -580,6 +580,74 @@ body.overflow.open .tray-icon {
   transition: width 1s linear;
 }
 
+/* ---------- Claude usage: glyph + two small limit bars (red from 90 %). */
+.claude {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+  animation: fade 0.4s var(--ease);
+}
+
+.claude svg {
+  width: 18px;
+  height: 18px;
+  fill: #e08a63;
+  transition: transform 0.4s var(--spring);
+}
+
+.claude:hover svg {
+  transform: rotate(45deg) scale(1.1);
+}
+
+.claude .limits {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.claude .limit {
+  display: grid;
+  grid-template-columns: 16px 56px 30px;
+  align-items: center;
+  gap: 4px;
+  line-height: 10px;
+}
+
+.claude .limit .fill {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #e08a63 var(--v), var(--hover) var(--v));
+  transition: --v 0.8s var(--ease);
+}
+
+.claude .limit.high .fill {
+  background: linear-gradient(to right, #ff5f57 var(--v), var(--hover) var(--v));
+}
+
+.claude .pct {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.claude .local {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 13px;
+}
+
+.claude .local small {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
 /* Windows "Animation effects" off → no motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
