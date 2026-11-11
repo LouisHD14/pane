@@ -137,9 +137,52 @@ body.overflow {
 .status {
   display: flex;
   align-items: center;
-  gap: 8px;
+}
+
+.status button {
   height: 36px;
-  padding: 0 10px;
+  padding: 0 7px;
+  display: grid;
+  place-items: center;
+}
+
+/* System load: three thin meters with labels, network speed stacked next to them. */
+.usage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.usage .meters {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.usage .meter {
+  display: grid;
+  grid-template-columns: 24px 44px;
+  align-items: center;
+  line-height: 9px;
+}
+
+.usage .meter .fill {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--v), var(--hover) var(--v));
+}
+
+.usage .net {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-variant-numeric: tabular-nums;
+  min-width: 62px;
+  line-height: 13px;
 }
 
 .status svg {
