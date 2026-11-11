@@ -8,3 +8,9 @@ Pane: own Windows 11 taskbar replacement with widgets (Tauri 2, Rust + TypeScrip
 - Stay light: target under ~100 MB RAM, ~0 % CPU idle. Prefer event hooks over polling.
 - Own design and name; LumaBar (lumabar.xyz) is only inspiration.
 - Login tokens (Claude, GitHub, solar) are read locally, never logged, never committed.
+
+## Build and test (learned 2026-11-11)
+- Build with `npx tauri build`. `cargo build --release` alone makes an exe that loads the UI from `localhost:1420` and shows an empty bar.
+- Rust needs `%USERPROFILE%\.cargo\bin` on PATH (new shells have it; old ones need it added).
+- Before each PR: `cargo test` in `src-tauri/`, `npm run build`, then `tools/smoke-test.ps1` and `tools/install-test.ps1` (they hide the taskbar for a few seconds).
+- See the bar: start the exe and screenshot the bottom of the screen. Inspect the page: start with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` and use the DevTools protocol (`http://127.0.0.1:9333/json`).
