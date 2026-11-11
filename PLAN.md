@@ -124,6 +124,9 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
 7. **Polish:** themes (light/dark/clear glass), settings page, signed installer, auto-update.
    - **Auto-update built 2026-11-12** (for v0.7.0): `tauri-plugin-updater`, endpoint `releases/latest/download/latest.json` on GitHub (repo must be public). `update.rs` checks 30 s after start and every 6 h, sends "update" to the bars → accent pill "Update x.y.z" at the end of the left side; click → download, taskbar back (`set_shown(false)` on the main thread, waited for), passive NSIS install, Pane restarts. Pane menu: "Check for updates" / "Up to date". Signature key in `%USERPROFILE%\.tauri\pane-updater.key`; `tools/release.ps1` builds + writes `latest.json`. No code signing (SmartScreen may warn on first install).
    - Not tested end to end yet: needs a first public release to update from.
+   - **Public repo 2026-11-12:** secret scan of all 45 commits clean; history rewritten to the GitHub noreply email; old repo renamed to private `LouisHD14/pane-archive` (keeps PRs #1-#11, whose commits still carry the old email); new public `LouisHD14/pane` with the clean history, v0.6.2 re-released there.
+   - **Memory 2026-11-12:** one shared WebView2 renderer (`--process-per-site --renderer-process-limit=1`) and the tray popup is destroyed when it closes (an opened popup kept ~30 MB). Result ~160-175 MB private for two bars (was 189 MB with the popup opened). The 100 MB target is not reachable with two hardware-drawn transparent pages: JS heap is only 3.6 MB per page, CSS effects change ±10 MB; `--enable-low-end-device-mode` (89 MB) and `--disable-gpu` (82 MB) both draw an empty bar. Accepted: ~0.5 % of 32 GB, idle CPU ~0.
+   - Not done (not asked for): themes, settings page. Paid code signing: skipped by the user.
 
 ## Open questions
-- Spotify + Claude on the left side: OK? (Using this guess until the user says otherwise.)
+- None. (Spotify + Claude on the left: used since Phase 4, no objection from the user.)
