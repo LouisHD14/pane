@@ -10,7 +10,7 @@ Everything the taskbar does today keeps working, plus widgets:
 - Spotify (Now Playing with controls)
 - Claude usage (limits for claude.ai / Claude Code)
 - Date, weekday, time, weather
-- Extras (Phase 6)
+- CPU/GPU/RAM usage, per-app volume (Windows mixer), network speed (Phase 6)
 
 Budget: under ~100 MB RAM and ~0 % CPU when idle. If Pane crashes or quits, the normal taskbar must come back.
 
@@ -73,19 +73,12 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
    - Option A: use Claude Code's local login (`~/.claude/.credentials.json`) to read the usage that `/usage` shows. Needs checking that this is reachable and stable.
    - Option B (fallback): Claude Code token totals from the local transcripts in `~/.claude/projects`.
    - Tokens stay local, read-only, never logged or sent anywhere else.
-6. **Extras** (suggestions, the user picks):
-   - **Solar live:** PV watts, battery %, today's kWh from the own solar API.
-   - **System:** CPU/GPU load and temperature, RAM; tiny graph on hover.
-   - **Claude Code jobs:** shows running background sessions, turns green when one is done.
-   - **GitHub:** open PRs and CI status for `LouisHD14` repos.
-   - **Stempelei:** new sign-ups / stamps today.
-   - **Focus timer:** Pomodoro that turns on Windows Do Not Disturb while it runs.
-   - **Mic/camera indicator:** shows when an app uses them; click mutes the mic.
-   - **Per-app volume** in a popup on the volume icon.
-   - **Next calendar event** with a countdown.
-   - **Network speed:** live up/down.
+6. **Extras (picked by the user 2026-11-11):**
+   - **CPU / GPU / RAM usage:** small % meters; CPU/RAM via `sysinfo`, GPU load via the Windows GPU performance counters (the ones Task Manager shows; works for the RTX 3060 without NVIDIA tools). Refresh every 2 s, paused while no monitor is on.
+   - **Per-app volume:** click on the volume icon opens the Windows volume mixer (`ms-settings:apps-volume`), where every app's volume is set. Later maybe an own popup with sliders (Windows audio session API).
+   - **Network speed:** live up/down (KB/s, MB/s) from the network adapter counters, every 1 s.
+   - Not picked for now (could come later): solar live, Claude Code jobs, GitHub, Stempelei, focus timer, mic/camera indicator, calendar event.
 7. **Polish:** themes (light/dark/clear glass), settings page, signed installer, auto-update.
 
 ## Open questions
-- Which extras first?
-- Spotify + Claude on the left side: OK?
+- Spotify + Claude on the left side: OK? (Using this guess until the user says otherwise.)
