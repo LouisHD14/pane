@@ -7,6 +7,7 @@ mod http;
 mod media;
 mod status;
 mod tray;
+mod update;
 mod usage;
 mod weather;
 mod win;
@@ -85,6 +86,16 @@ fn set_shown(app: &AppHandle, show: bool) {
 fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || f(&handle));
+}
+
+/// `set_shown` from any thread, returning once the main thread has done it.
+fn shown_and_wait(app: &AppHandle, show: bool) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    on_main(app, move |h| {
+        set_shown(h, show);
+        let _ = tx.send(());
+    });
+    let _ = rx.recv();
 }
 
 fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
@@ -471,6 +482,21 @@ fn set_autostart(app: AppHandle, on: bool) {
     }
 }
 
+/// Manual check from the Pane menu: the new version, or None when Pane is up to date.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Option<String> {
+    update::check(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let result = update::install(&app).await;
+    if let Err(e) = &result {
+        crate::win::log(&format!("update failed: {e}"));
+    }
+    result
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -501,6 +527,7 @@ fn main() {
         )
         // "Start with Windows" (HKCU Run key, off until the user turns it on).
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Bars(Mutex::new(Vec::new())))
         .invoke_handler(tauri::generate_handler![
             open_start,
@@ -527,7 +554,9 @@ fn main() {
             open_overflow,
             close_overflow,
             autostart,
-            set_autostart
+            set_autostart,
+            check_update,
+            install_update
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -539,6 +568,7 @@ fn main() {
             weather_loop(handle.clone());
             usage_loop(handle.clone());
             claude_loop(handle.clone());
+            update::watch(handle.clone());
             let m = handle.clone();
             media::watch(move || {
                 let _ = m.emit("media", media::current());
