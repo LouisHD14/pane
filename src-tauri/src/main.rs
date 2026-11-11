@@ -1,6 +1,8 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[allow(dead_code)] // shortcut: not wired to the UI yet; drop once the status icons use it.
+mod status;
 mod win;
 
 use std::os::windows::process::CommandExt;
