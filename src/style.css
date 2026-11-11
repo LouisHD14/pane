@@ -82,6 +82,58 @@ body {
   background: var(--accent);
 }
 
+.tray,
+.hidden-icons {
+  display: flex;
+  gap: 2px;
+}
+
+.tray-icon,
+.overflow-arrow {
+  width: 32px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+}
+
+.tray-icon img {
+  width: 16px;
+  height: 16px;
+}
+
+.overflow-arrow svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* "Hidden icons" popup: a small glass grid above the arrow. */
+body.overflow {
+  padding: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+}
+
+.hidden-icons {
+  flex-wrap: wrap;
+  max-width: 200px;
+  gap: 0;
+}
+
+.hidden-icons .tray-icon {
+  width: 40px;
+  height: 40px;
+}
+
 .status {
   display: flex;
   align-items: center;

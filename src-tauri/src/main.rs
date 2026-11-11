@@ -3,6 +3,7 @@
 
 mod apps;
 mod status;
+mod tray;
 mod win;
 
 use std::os::windows::process::CommandExt;
@@ -47,6 +48,9 @@ fn set_shown(app: &AppHandle, show: bool) {
     if show {
         win::hide_taskbar(&dir);
         place_bars(app, true);
+        // Tray icons come to Pane only while it is shown; Explorer gets every message too.
+        let h = app.clone();
+        tray::start(move || push_tray(&h));
         // Explorer frees the taskbar's screen edge a moment after auto-hide turns on; place the bars again then.
         let handle = app.clone();
         std::thread::spawn(move || {
@@ -58,6 +62,7 @@ fn set_shown(app: &AppHandle, show: bool) {
             });
         });
     } else {
+        tray::stop();
         place_bars(app, false);
         win::restore_taskbar(&dir);
     }
@@ -140,6 +145,9 @@ fn rebuild_bars(app: &AppHandle) {
             }
             let _ = window.destroy();
         }
+        if let Some(popup) = app.get_webview_window(&format!("overflow-{label}")) {
+            let _ = popup.destroy();
+        }
     }
     if let Err(e) = create_bars(app) {
         eprintln!("pane: can't rebuild bars: {e}");
@@ -177,6 +185,11 @@ fn push_apps(app: &AppHandle) {
     for (label, monitor) in targets {
         let _ = app.emit_to(label.as_str(), "apps", apps::list(monitor));
     }
+}
+
+/// Sends all tray icons to every bar and popup (bars show the promoted ones, popups the rest).
+fn push_tray(app: &AppHandle) {
+    let _ = app.emit("tray", tray::list());
 }
 
 /// Starts `Pane.exe --watchdog <pid>`: it waits until this process ends (also by crash or Task Manager)
@@ -286,6 +299,53 @@ async fn launch(id: String) {
 }
 
 #[tauri::command]
+fn get_tray() -> Vec<tray::TrayIcon> {
+    tray::list()
+}
+
+#[tauri::command]
+fn tray_click(id: String, kind: tray::Click, x: i32, y: i32) {
+    tray::click(&id, kind, x, y);
+}
+
+/// Opens the "hidden icons" popup above the arrow of the bar that asks. `client_x` is the arrow's
+/// centre in CSS pixels inside that bar.
+#[tauri::command]
+async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
+    let label = format!("overflow-{}", window.label());
+    let popup = match app.get_webview_window(&label) {
+        Some(popup) => popup,
+        None => WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+            .title("Pane")
+            .decorations(false)
+            .transparent(true)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .visible(false)
+            .effects(EffectsBuilder::new().effect(Effect::Acrylic).color(Color(16, 18, 26, 170)).build())
+            .build()?,
+    };
+    // Grid of 40 px cells, 5 per row, 8 px padding (same as the CSS).
+    let count = tray::list().iter().filter(|t| !t.promoted).count().max(1);
+    let (cols, rows) = (count.min(5) as f64, count.div_ceil(5) as f64);
+    let scale = window.scale_factor()?;
+    let (w, h) = ((cols * 40.0 + 18.0) * scale, (rows * 40.0 + 18.0) * scale);
+    let bar = window.outer_position()?;
+    let x = bar.x as f64 + client_x * scale - w / 2.0;
+    let y = bar.y as f64 - h - 8.0 * scale;
+    popup.set_size(PhysicalSize::new(w.round() as u32, h.round() as u32))?;
+    popup.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))?;
+    popup.show()?;
+    popup.set_focus()
+}
+
+#[tauri::command]
+fn close_overflow(window: WebviewWindow) {
+    let _ = window.hide();
+}
+
+#[tauri::command]
 fn autostart(app: AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
 }
@@ -341,6 +401,10 @@ fn main() {
             activate,
             close_window,
             launch,
+            get_tray,
+            tray_click,
+            open_overflow,
+            close_overflow,
             autostart,
             set_autostart
         ])
