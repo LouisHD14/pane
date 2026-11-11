@@ -1,0 +1,90 @@
+:root {
+  --text: rgba(255, 255, 255, 0.95);
+  --text-dim: rgba(255, 255, 255, 0.7);
+  --hover: rgba(255, 255, 255, 0.1);
+  --glass: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  /* Transparent so the Windows acrylic effect behind the page shows through. */
+  background: transparent;
+  color: var(--text);
+  font: 13px "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  user-select: none;
+  cursor: default;
+}
+
+.bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: 100%;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--glass-border);
+}
+
+.center {
+  display: flex;
+  gap: 4px;
+}
+
+.right {
+  justify-self: end;
+}
+
+button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border-radius: 6px;
+}
+
+button:hover {
+  background: var(--hover);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+.start {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+}
+
+.start svg {
+  width: 18px;
+  height: 18px;
+  fill: #4cc2ff;
+}
+
+.clock {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+}
+
+.date {
+  color: var(--text-dim);
+}
+
+.time {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

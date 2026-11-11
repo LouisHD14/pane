@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Pane</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="bar">
+      <div class="left"></div>
+      <div class="center">
+        <button id="start" class="start" aria-label="Start">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="1" y="1" width="6.5" height="6.5" rx="1" />
+            <rect x="8.5" y="1" width="6.5" height="6.5" rx="1" />
+            <rect x="1" y="8.5" width="6.5" height="6.5" rx="1" />
+            <rect x="8.5" y="8.5" width="6.5" height="6.5" rx="1" />
+          </svg>
+        </button>
+      </div>
+      <div class="right">
+        <button id="clock" class="clock" aria-label="Notifications and calendar">
+          <span id="date" class="date"></span>
+          <span id="time" class="time"></span>
+        </button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
