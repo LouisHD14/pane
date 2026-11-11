@@ -160,7 +160,7 @@ fn rebuild_bars(app: &AppHandle) {
         }
     }
     if let Err(e) = create_bars(app) {
-        eprintln!("pane: can't rebuild bars: {e}");
+        crate::win::log(&format!("can't rebuild bars: {e}"));
     }
     if SHOWN.load(SeqCst) {
         place_bars(app, true);
@@ -214,6 +214,9 @@ static CLAUDE: Mutex<Option<claude::ClaudeUsage>> = Mutex::new(None);
 fn claude_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
         let now = claude::fetch();
+        if let claude::ClaudeUsage::Local { note, .. } = &now {
+            win::log(&format!("claude limits unavailable: {note}"));
+        }
         *CLAUDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(now.clone());
         let _ = app.emit("claude", now);
         std::thread::sleep(Duration::from_secs(5 * 60));
@@ -228,7 +231,7 @@ fn weather_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
         let result = weather::fetch();
         if let Err(e) = &result {
-            eprintln!("pane: no weather: {e}");
+            crate::win::log(&format!("no weather: {e}"));
         }
         let wait = if result.is_ok() { 30 } else { 5 };
         let now = result.ok();
@@ -249,7 +252,7 @@ fn start_watchdog() {
     let Ok(exe) = std::env::current_exe() else { return };
     let pid = std::process::id().to_string();
     if let Err(e) = std::process::Command::new(exe).args(["--watchdog", &pid]).creation_flags(CREATE_NO_WINDOW).spawn() {
-        eprintln!("pane: watchdog didn't start: {e}");
+        crate::win::log(&format!("watchdog didn't start: {e}"));
     }
 }
 
@@ -369,6 +372,13 @@ fn get_claude() -> Option<claude::ClaudeUsage> {
     CLAUDE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// The Claude logo, taken from the Claude desktop app installed on this PC ("" if it isn't installed).
+// shortcut: fixed package name of the Microsoft Store / MSIX Claude app; other installs fall back to the drawn glyph.
+#[tauri::command]
+async fn claude_icon() -> String {
+    apps::icon_of("shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude")
+}
+
 #[tauri::command]
 fn open_claude_usage() {
     win::open("https://claude.ai/settings/usage");
@@ -450,7 +460,7 @@ fn set_autostart(app: AppHandle, on: bool) {
     let launcher = app.autolaunch();
     let result = if on { launcher.enable() } else { launcher.disable() };
     if let Err(e) = result {
-        eprintln!("pane: can't change autostart: {e}");
+        crate::win::log(&format!("can't change autostart: {e}"));
     }
 }
 
@@ -502,6 +512,7 @@ fn main() {
             open_widgets,
             open_volume_mixer,
             get_claude,
+            claude_icon,
             open_claude_usage,
             open_task_manager,
             get_tray,
