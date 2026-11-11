@@ -481,6 +481,14 @@ fn info(w: &Win) -> (String, String) {
     found
 }
 
+/// Icon of any shell item (an exe or .lnk path, or "shell:AppsFolder\<AppUserModelID>") as a PNG
+/// data URL, "" if there is none.
+pub fn icon_of(path: &str) -> String {
+    com();
+    let item: Option<IShellItem2> = unsafe { SHCreateItemFromParsingName(&HSTRING::from(path), None) }.ok();
+    item.and_then(|i| i.cast().ok()).map_or(String::new(), |f| icon(&f))
+}
+
 /// The item's icon as a PNG data URL, "" if there is none.
 fn icon(factory: &IShellItemImageFactory) -> String {
     let Ok(bmp) = (unsafe { factory.GetImage(SIZE { cx: ICON_PX, cy: ICON_PX }, SIIGBF_ICONONLY) }) else {

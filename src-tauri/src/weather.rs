@@ -40,7 +40,7 @@ pub fn fetch() -> Result<Weather, String> {
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={lat:.2}&longitude={lon:.2}&current=temperature_2m,weather_code,is_day&timezone=auto"
     );
-    let body = crate::http::get(&url, &[]).map_err(|_| "offline".to_string())?;
+    let body = crate::http::get(&url, &[]).map_err(|e| format!("offline ({e})"))?;
     parse(&body)
 }
 

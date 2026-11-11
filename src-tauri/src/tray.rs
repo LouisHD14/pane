@@ -225,7 +225,7 @@ pub fn start(on_change: impl Fn() + Send + Sync + 'static) {
     match created.recv() {
         Ok(hwnd) => *host = Some(Host { hwnd, thread }),
         Err(_) => {
-            eprintln!("pane: can't create the tray window");
+            crate::win::log("can't create the tray window");
             *lock(&CHANGED) = None;
         }
     }
