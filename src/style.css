@@ -4,6 +4,7 @@
   --hover: rgba(255, 255, 255, 0.1);
   --glass: rgba(255, 255, 255, 0.08);
   --glass-border: rgba(255, 255, 255, 0.14);
+  --accent: #4cc2ff;
   color-scheme: dark;
 }
 
@@ -37,6 +38,80 @@ body {
 
 .right {
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.apps {
+  display: flex;
+  gap: 4px;
+}
+
+.app {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+}
+
+.app img {
+  width: 24px;
+  height: 24px;
+}
+
+/* Running: short line under the icon. Active (in front): longer, accent-coloured line + lighter tile. */
+.app.running::after {
+  content: "";
+  position: absolute;
+  bottom: 2px;
+  width: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-dim);
+}
+
+.app.active {
+  background: var(--glass);
+}
+
+.app.active::after {
+  width: 16px;
+  background: var(--accent);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+}
+
+.status svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.status svg .fill {
+  fill: var(--text);
+  stroke: none;
+}
+
+.status svg .dim {
+  stroke: var(--text-dim);
+  opacity: 0.4;
+}
+
+.status svg .bolt {
+  stroke: #ffd60a;
 }
 
 button {
@@ -66,7 +141,7 @@ button:focus-visible {
 .start svg {
   width: 18px;
   height: 18px;
-  fill: #4cc2ff;
+  fill: var(--accent);
 }
 
 .clock {
