@@ -5,6 +5,7 @@ Own taskbar for Windows 11: a glass bar at the bottom of every monitor with Star
 ## Use it
 - **Install:** run `Pane_<version>_x64-setup.exe` (no admin needed). Start Pane from the Start menu.
 - **Apps:** your Windows taskbar pins, then open apps. Click to start / bring to front / minimize; right-click for its windows, "New window", "Close". Pin new apps from the Start menu (right-click → "Pin to taskbar").
+- **Tray icons:** the icons Windows shows on the taskbar sit next to the status icons, the rest behind the ^ arrow. Click and right-click work like on the Windows taskbar. Which icons are visible follows Windows Settings → Personalization → Taskbar → Other system tray icons.
 - **Status and clock:** network/volume icons open Quick Settings, the clock opens notifications and the calendar.
 - **Start with Windows:** right-click the bar → "Start with Windows".
 - **Hide / show:** Ctrl+Alt+P, or right-click the bar → "Hide Pane". The Windows taskbar comes back while Pane is hidden.
@@ -30,6 +31,8 @@ Build with `npx tauri build`, not `cargo build --release`: plain cargo makes an 
 
 - `tools/fullscreen-test.ps1 -Exe <pane.exe>`: opens a borderless fullscreen window on the main monitor, checks only that bar hides and comes back.
 
+- `tools/tray-test.ps1 -Exe <pane.exe> -Out <prefix>`: counts the bar's tray icons, clicks the ^ arrow and saves screenshots of the bar, the popup and Explorer's tray afterwards (uses `tools/eval.mjs` and the WebView2 debug port).
+
 All of them hide your taskbar for a few seconds.
 
 ## Layout
@@ -39,6 +42,7 @@ src-tauri/src/main.rs     App: one bar per monitor, show/hide, watchdog, command
 src-tauri/src/win.rs      Windows calls: hide/restore taskbar, reserve the screen edge, fullscreen check, send keys
 src-tauri/src/apps.rs     Pinned + running apps, icons, activate/close/launch, window events
 src-tauri/src/status.rs   Network, volume, battery state
+src-tauri/src/tray.rs     Tray icon host (own Shell_TrayWnd, forwards everything to Explorer)
 src-tauri/windows/        Uninstaller hook (closes Pane, restores the taskbar)
 tools/                    Test scripts
 ```
