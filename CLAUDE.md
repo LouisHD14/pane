@@ -13,6 +13,7 @@ Pane: own Windows 11 taskbar replacement with widgets (Tauri 2, Rust + TypeScrip
 - Build with `npx tauri build`. `cargo build --release` alone makes an exe that loads the UI from `localhost:1420` and shows an empty bar.
 - Rust needs `%USERPROFILE%\.cargo\bin` on PATH (new shells have it; old ones need it added).
 - Before each PR: `cargo test` in `src-tauri/`, `npm run build`, then `tools/smoke-test.ps1` and `tools/install-test.ps1` (they hide the taskbar for a few seconds).
+- The user runs Pane themselves now: stop their Pane before tests (single instance would hand over to it), start it again afterwards. `install-test.ps1` refuses to run while Pane is installed, because it ends with an uninstall (it removed the user's install once, 2026-11-11).
 - `git fetch origin` before creating worktrees (also for subagents): new worktrees start from the local `origin/main`, which is stale after a PR was merged on GitHub.
 - Clicks sent from inside the page (DevTools) are not real input, so Windows refuses to bring apps to the front; test clicks with real mouse input (SetCursorPos + mouse_event). A test window must be TopMost to receive a test click.
 - Claude's shell runs in a network sandbox: curl works, but WinRT `HttpClient` HTTPS fails there with 0x80072F8F. A failing weather fetch in tests is not proof of a bug; check on the user's desktop.
