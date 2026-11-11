@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod apps;
+#[allow(dead_code)] // wired to the UI in the Now Playing step
+mod media;
 mod status;
 mod tray;
 mod win;
