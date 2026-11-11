@@ -25,6 +25,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ES
 const BAR_HEIGHT: f64 = 48.0;
 /// The bar floats this far (logical px) from the screen edges and from maximized windows above it.
 const GAP: f64 = 6.0;
+/// WebView2 start options for every Pane window (all windows must use the same ones). Tauri's own
+/// defaults plus: one renderer process for all bars and the popup instead of one each (~30 MB each).
+const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site --renderer-process-limit=1";
 /// Glass tint 0xAABBGGRR: a dark blue-grey covering ~25 % of the blur, so the background shines through.
 const GLASS_TINT: u32 = 0x40_1A_12_10;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -129,6 +133,7 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
         let label = format!("bar-{generation}-{i}");
         let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Pane")
+            .additional_browser_args(BROWSER_ARGS)
             .decorations(false)
             .transparent(true)
             .shadow(false)
@@ -419,6 +424,7 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
         None => {
             let popup = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
                 .title("Pane")
+                .additional_browser_args(BROWSER_ARGS)
                 .decorations(false)
                 .transparent(true)
                 .shadow(false)
@@ -447,7 +453,8 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
 
 #[tauri::command]
 fn close_overflow(window: WebviewWindow) {
-    let _ = window.hide();
+    // Destroyed, not hidden: a hidden popup keeps its ~30 MB page alive. Reopening builds it again (~0.1 s).
+    let _ = window.destroy();
 }
 
 #[tauri::command]
