@@ -5,6 +5,8 @@ mod apps;
 mod media;
 mod status;
 mod tray;
+#[allow(dead_code)]
+mod usage;
 mod weather;
 mod win;
 
