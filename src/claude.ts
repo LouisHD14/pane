@@ -15,26 +15,39 @@ const resetText = (iso: string | null) => {
   return `, resets ${new Intl.DateTimeFormat(undefined, fmt).format(d)}`;
 };
 
+// --v goes on the fill itself: it is a registered property that doesn't inherit (so it can animate).
 const bar = (label: string, l: Limit) => {
   const pct = Math.round(l.used_pct);
-  return `<span class="limit ${pct >= 90 ? "high" : ""}" style="--v:${pct}%"><span class="label">${label}</span><span class="fill"></span><span class="pct">${pct}%</span></span>`;
+  return `<span class="limit ${pct >= 90 ? "high" : ""}"><span class="label">${label}</span><span class="fill" style="--v:${pct}%"></span><span class="pct">${pct}%</span></span>`;
 };
+
+/** The Claude logo from the installed Claude app; the drawn glyph until (or unless) it is found. */
+let logo = "";
+let last: { el: HTMLElement; u: ClaudeUsage | null } | null = null;
+
+export function setClaudeLogo(url: string) {
+  logo = url;
+  if (last) renderClaude(last.el, last.u);
+}
+
+const mark = () => (logo ? `<img class="logo" src="${logo}" alt="" />` : GLYPH);
 
 /** Compact token count: 1234567 → "1.2M". */
 const tokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : `${n}`);
 
 export function renderClaude(el: HTMLElement, u: ClaudeUsage | null) {
+  last = { el, u };
   el.hidden = !u;
   if (!u) return;
   if (u.source === "limits") {
-    el.innerHTML = `${GLYPH}<span class="limits">${bar("5h", u.five_hour)}${bar("7d", u.seven_day)}</span>`;
+    el.innerHTML = `${mark()}<span class="limits">${bar("5h", u.five_hour)}${bar("7d", u.seven_day)}</span>`;
     el.title = [
       `Claude ${u.plan.charAt(0).toUpperCase()}${u.plan.slice(1)}`,
       `5-hour limit: ${Math.round(u.five_hour.used_pct)} %${resetText(u.five_hour.resets_at)}`,
       `Weekly limit: ${Math.round(u.seven_day.used_pct)} %${resetText(u.seven_day.resets_at)}`,
     ].join("\n");
   } else {
-    el.innerHTML = `${GLYPH}<span class="local">${tokens(u.tokens_5h)}<small>tokens · 5h</small></span>`;
+    el.innerHTML = `${mark()}<span class="local">${tokens(u.tokens_5h)}<small>tokens · 5h</small></span>`;
     el.title = `Claude Code tokens in the last 5 hours: ${u.tokens_5h.toLocaleString()}\n${u.note}`;
   }
   el.setAttribute("aria-label", el.title.replace(/\n/g, ". "));

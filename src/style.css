@@ -599,8 +599,16 @@ body.overflow.open .tray-icon {
   transition: transform 0.4s var(--spring);
 }
 
-.claude:hover svg {
-  transform: rotate(45deg) scale(1.1);
+.claude .logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  transition: transform 0.4s var(--spring);
+}
+
+.claude:hover svg,
+.claude:hover .logo {
+  transform: rotate(-8deg) scale(1.12);
 }
 
 .claude .limits {
