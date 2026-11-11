@@ -1,6 +1,8 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[allow(dead_code)] // wired into the UI next
+mod apps;
 mod win;
 
 use std::os::windows::process::CommandExt;
