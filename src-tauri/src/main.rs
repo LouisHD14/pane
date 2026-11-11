@@ -2,8 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod apps;
+mod media;
 mod status;
 mod tray;
+mod weather;
 mod win;
 
 use std::os::windows::process::CommandExt;
@@ -187,6 +189,24 @@ fn push_apps(app: &AppHandle) {
     }
 }
 
+/// Last weather (None: no location, offline, or not fetched yet).
+static WEATHER: Mutex<Option<weather::Weather>> = Mutex::new(None);
+
+/// Fetches the weather now and every 30 minutes (5 minutes after a failure) and sends it to the bars.
+fn weather_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        let result = weather::fetch();
+        if let Err(e) = &result {
+            eprintln!("pane: no weather: {e}");
+        }
+        let wait = if result.is_ok() { 30 } else { 5 };
+        let now = result.ok();
+        *WEATHER.lock().unwrap_or_else(|e| e.into_inner()) = now.clone();
+        let _ = app.emit("weather", now);
+        std::thread::sleep(Duration::from_secs(wait * 60));
+    });
+}
+
 /// Sends all tray icons to every bar and popup (bars show the promoted ones, popups the rest).
 fn push_tray(app: &AppHandle) {
     let _ = app.emit("tray", tray::list());
@@ -299,6 +319,26 @@ async fn launch(id: String) {
 }
 
 #[tauri::command]
+async fn get_media() -> Option<media::NowPlaying> {
+    media::current()
+}
+
+#[tauri::command]
+async fn media_control(action: media::Action) {
+    media::control(action);
+}
+
+#[tauri::command]
+fn get_weather() -> Option<weather::Weather> {
+    WEATHER.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+fn open_widgets() {
+    win::press(&[VK_LWIN, VIRTUAL_KEY(b'W' as u16)]);
+}
+
+#[tauri::command]
 fn get_tray() -> Vec<tray::TrayIcon> {
     tray::list()
 }
@@ -401,6 +441,10 @@ fn main() {
             activate,
             close_window,
             launch,
+            get_media,
+            media_control,
+            get_weather,
+            open_widgets,
             get_tray,
             tray_click,
             open_overflow,
@@ -415,6 +459,11 @@ fn main() {
             set_shown(&handle, true);
             watch_loop(handle.clone());
             status_loop(handle.clone());
+            weather_loop(handle.clone());
+            let m = handle.clone();
+            media::watch(move || {
+                let _ = m.emit("media", media::current());
+            });
             let h = handle.clone();
             apps::watch(move || {
                 push_apps(&h);

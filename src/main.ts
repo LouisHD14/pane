@@ -3,6 +3,8 @@ import { Menu, type MenuItemOptions, type CheckMenuItemOptions, type PredefinedM
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
+import { mountMedia, renderMedia, type NowPlaying } from "./media";
+import { renderWeather, type Weather } from "./weather";
 
 type WinItem = { hwnd: number; title: string; active: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
@@ -60,6 +62,16 @@ function barPage() {
     const r = $("overflow").getBoundingClientRect();
     invoke("open_overflow", { clientX: r.left + r.width / 2 });
   });
+
+  // --- Now Playing (Spotify, browsers, any app using Windows media controls).
+  mountMedia($("media"));
+  invoke<NowPlaying | null>("get_media").then((np) => renderMedia($("media"), np));
+  me.listen<NowPlaying | null>("media", (e) => renderMedia($("media"), e.payload));
+
+  // --- Weather under the time; a click opens the Windows Widgets board with the full forecast.
+  invoke<Weather | null>("get_weather").then((w) => renderWeather($("weather"), w));
+  me.listen<Weather | null>("weather", (e) => renderWeather($("weather"), e.payload));
+  $("weather").addEventListener("click", () => invoke("open_widgets"));
 
   // --- Status icons (network, volume, battery) open Windows Quick Settings.
   invoke<Status>("get_status").then((s) => renderStatus($("status"), s));

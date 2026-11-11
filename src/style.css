@@ -196,15 +196,138 @@ button:focus-visible {
   fill: var(--accent);
 }
 
+/* Glass block on the right: date + time on top, weather below. */
+.time-block {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 40px;
+  padding: 0 4px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+
 .clock {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  height: 36px;
-  padding: 0 12px;
-  background: var(--glass);
-  border: 1px solid var(--glass-border);
-  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+.weather {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.weather svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.weather .sun {
+  stroke: #ffd60a;
+}
+
+.weather .moon {
+  stroke: #c9d6ff;
+}
+
+.weather .rain {
+  stroke: #4cc2ff;
+}
+
+.weather .snow {
+  stroke: #ffffff;
+  stroke-width: 2.6;
+}
+
+.weather .bolt {
+  stroke: #ffd60a;
+}
+
+/* Now Playing on the left: cover, title/artist, controls, thin progress line. */
+.media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 340px;
+  height: 40px;
+  padding: 0 6px;
+}
+
+.media .cover {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.media .track {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.media .title,
+.media .artist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media .title {
+  font-weight: 600;
+}
+
+.media .artist {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.media .controls {
+  display: flex;
+}
+
+.media .controls button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+}
+
+.media .controls svg {
+  width: 13px;
+  height: 13px;
+  fill: var(--text);
+}
+
+.media .progress {
+  position: absolute;
+  left: 48px;
+  right: 6px;
+  bottom: 1px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--hover);
+}
+
+.media .done {
+  height: 100%;
+  border-radius: 1px;
+  background: #1ed760;
 }
 
 .date {
