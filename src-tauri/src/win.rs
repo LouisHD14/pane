@@ -13,7 +13,10 @@ use windows::Win32::UI::Shell::{
     SHAppBarMessage, ABE_BOTTOM, ABM_GETSTATE, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABM_SETSTATE,
     ABS_AUTOHIDE, APPBARDATA,
 };
-use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, FindWindowW, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNA};
+use windows::Win32::UI::WindowsAndMessaging::{
+    FindWindowExW, FindWindowW, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
+    IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNA,
+};
 
 /// Pane's data folder, %LOCALAPPDATA%\org.gruening.pane (the same one the uninstaller offers to delete).
 pub fn data_dir() -> PathBuf {
@@ -145,6 +148,34 @@ pub fn press(keys: &[VIRTUAL_KEY]) {
     unsafe { SendInput(&all, size_of::<INPUT>() as i32) };
 }
 
+/// True when the foreground window covers the whole `monitor` (a game or video in fullscreen).
+/// A maximized window doesn't count: it stops at the work area above Pane.
+pub fn fullscreen_on(monitor: RECT) -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_invalid() {
+            return false;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if pid == std::process::id() {
+            return false;
+        }
+        // The desktop (wallpaper) window covers the monitor too.
+        let mut class = [0u16; 32];
+        let len = GetClassNameW(fg, &mut class).max(0) as usize;
+        if matches!(String::from_utf16_lossy(&class[..len]).as_str(), "Progman" | "WorkerW") {
+            return false;
+        }
+        let mut rect = RECT::default();
+        GetWindowRect(fg, &mut rect).is_ok() && covers(rect, monitor)
+    }
+}
+
+fn covers(r: RECT, m: RECT) -> bool {
+    r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
+}
+
 /// Blocks until process `pid` has ended (returns at once if it is already gone).
 pub fn wait_for_process(pid: u32) {
     unsafe {
@@ -164,6 +195,16 @@ mod tests {
         // Earlier run crashed with auto-hide forced on (3); the user's real setting was 2.
         assert_eq!(setting_to_restore(Some(2), 3), 2);
         assert_eq!(setting_to_restore(None, 2), 2);
+    }
+
+    #[test]
+    fn fullscreen_means_covering_the_whole_monitor() {
+        let monitor = RECT { left: 0, top: 0, right: 2560, bottom: 1440 };
+        // Borderless fullscreen game, and one on the second monitor (left of the first).
+        assert!(covers(RECT { left: 0, top: 0, right: 2560, bottom: 1440 }, monitor));
+        assert!(!covers(RECT { left: -2560, top: 0, right: 0, bottom: 1440 }, monitor));
+        // Maximized window: overhangs 8 px but stops above Pane's 48 px edge.
+        assert!(!covers(RECT { left: -8, top: -8, right: 2568, bottom: 1400 }, monitor));
     }
 
     #[test]
