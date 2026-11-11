@@ -7,7 +7,9 @@
   </head>
   <body>
     <div class="bar">
-      <div class="left"></div>
+      <div class="left">
+        <div id="media" class="media" hidden></div>
+      </div>
       <div class="center">
         <button id="start" class="start" aria-label="Start">
           <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -25,10 +27,13 @@
         </button>
         <div id="tray" class="tray"></div>
         <button id="status" class="status" aria-label="Quick settings"></button>
-        <button id="clock" class="clock" aria-label="Notifications and calendar">
-          <span id="date" class="date"></span>
-          <span id="time" class="time"></span>
-        </button>
+        <div class="time-block">
+          <button id="clock" class="clock" aria-label="Notifications and calendar">
+            <span id="date" class="date"></span>
+            <span id="time" class="time"></span>
+          </button>
+          <button id="weather" class="weather" hidden></button>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
