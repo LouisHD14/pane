@@ -16,5 +16,8 @@ Pane: own Windows 11 taskbar replacement with widgets (Tauri 2, Rust + TypeScrip
 - The user runs Pane themselves now: stop their Pane before tests (single instance would hand over to it), start it again afterwards. `install-test.ps1` refuses to run while Pane is installed, because it ends with an uninstall (it removed the user's install once, 2026-11-11).
 - `git fetch origin` before creating worktrees (also for subagents): new worktrees start from the local `origin/main`, which is stale after a PR was merged on GitHub.
 - Clicks sent from inside the page (DevTools) are not real input, so Windows refuses to bring apps to the front; test clicks with real mouse input (SetCursorPos + mouse_event). A test window must be TopMost to receive a test click.
-- Claude's shell runs in a network sandbox: curl works, but WinRT `HttpClient` HTTPS fails there with 0x80072F8F. A failing weather fetch in tests is not proof of a bug; check on the user's desktop.
+- HTTPS goes through `ureq` (rustls). WinRT `HttpClient` failed Open-Meteo with 0x80072F8F on the user's desktop too (not only in Claude's sandbox) while Windows' curl worked (2026-11-11).
+- Processes Claude starts run in Claude's sandbox. Don't start the user's own Pane from Claude's shell; ask them to start it from the Start menu.
+- Errors go to `%LOCALAPPDATA%\org.gruening.pane\pane.log`: read it first when something doesn't show up.
+- Undecorated windows with `.shadow(true)` get invisible 7 px borders that shift the bar onto the next monitor: keep `shadow(false)`.
 - See the bar: start the exe and screenshot the bottom of the screen. Inspect the page: start with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` and use the DevTools protocol (`http://127.0.0.1:9333/json`).
