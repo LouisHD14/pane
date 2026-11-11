@@ -46,13 +46,14 @@ fn appbar(hwnd: HWND) -> APPBARDATA {
     APPBARDATA { cbSize: size_of::<APPBARDATA>() as u32, hWnd: hwnd, ..Default::default() }
 }
 
-/// Explorer's taskbar window. Pane's tray host also has a window named "Shell_TrayWnd"; skip it.
-fn tray() -> Option<HWND> {
+/// Explorer's main taskbar window; skips Pane's own `Shell_TrayWnd` (the tray icon host in tray.rs).
+pub fn tray() -> Option<HWND> {
+    let me = std::process::id();
     let mut prev = None;
     while let Ok(h) = unsafe { FindWindowExW(None, prev, w!("Shell_TrayWnd"), PCWSTR::null()) } {
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
-        if pid != std::process::id() {
+        if pid != me {
             return Some(h);
         }
         prev = Some(h);
