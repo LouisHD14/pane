@@ -8,6 +8,7 @@ Own taskbar for Windows 11: a glass bar at the bottom of every monitor with Star
 - **Tray icons:** the icons Windows shows on the taskbar sit next to the status icons, the rest behind the ^ arrow. Click and right-click work like on the Windows taskbar. Which icons are visible follows Windows Settings → Personalization → Taskbar → Other system tray icons.
 - **Now Playing (left):** cover, title, artist and play/pause/next for Spotify, YouTube in the browser or any app using Windows media controls.
 - **Weather (under the time):** from your Windows location (Settings → Privacy & security → Location must allow desktop apps) and Open-Meteo. Click it for the Windows Widgets board.
+- **Claude usage (left):** your 5-hour and weekly Claude limits with reset times (from Claude Code's login on this PC, read-only); click for the usage page.
 - **System load:** CPU / GPU / RAM meters and download/upload speed; click for Task Manager.
 - **Status and clock:** the network icon opens Quick Settings, the volume icon the per-app volume mixer, the clock notifications and the calendar.
 - **Start with Windows:** right-click the bar → "Start with Windows".
@@ -49,6 +50,8 @@ src-tauri/src/tray.rs     Tray icon host (own Shell_TrayWnd, forwards everything
 src-tauri/src/media.rs    Now Playing (Windows media controls)
 src-tauri/src/weather.rs  Windows location + Open-Meteo
 src-tauri/src/usage.rs    CPU / GPU / RAM load and network speed
+src-tauri/src/claude.rs   Claude plan limits (Claude Code login) or local token count
+src-tauri/src/http.rs     Small HTTPS GET (WinRT)
 src-tauri/windows/        Uninstaller hook (closes Pane, restores the taskbar)
 tools/                    Test scripts
 ```
