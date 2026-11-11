@@ -26,6 +26,19 @@ pub fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("org.gruening.pane")
 }
 
+/// Appends a line to `pane.log` in the data folder (release builds have no console).
+/// The file is started over once it passes 64 KB.
+pub fn log(message: &str) {
+    use std::io::Write;
+    let path = data_dir().join("pane.log");
+    let too_big = fs::metadata(&path).map_or(false, |m| m.len() > 64 * 1024);
+    let file = fs::OpenOptions::new().create(true).append(!too_big).write(true).truncate(too_big).open(&path);
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    if let Ok(mut file) = file {
+        let _ = writeln!(file, "{secs} {message}");
+    }
+}
+
 /// Holds the taskbar's auto-hide setting from before Pane changed it. Exists only while Pane hides the taskbar.
 fn state_file(dir: &Path) -> PathBuf {
     dir.join("taskbar-autohide.txt")
@@ -99,7 +112,7 @@ pub fn hide_taskbar(dir: &Path) {
     match saved {
         Ok(()) => set_autohide_setting(original | ABS_AUTOHIDE),
         // Without the file the setting couldn't be restored, so leave it alone and only hide the windows.
-        Err(e) => eprintln!("pane: can't save taskbar setting, leaving auto-hide unchanged: {e}"),
+        Err(e) => log(&format!("can't save taskbar setting, leaving auto-hide unchanged: {e}")),
     }
     keep_hidden();
 }
