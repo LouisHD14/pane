@@ -3,10 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use windows::core::HSTRING;
 use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator, PositionAccuracy};
-use windows::Foundation::{TimeSpan, Uri};
-use windows::Web::Http::HttpClient;
+use windows::Foundation::TimeSpan;
 
 #[derive(Serialize, Clone, PartialEq, Debug)]
 pub struct Weather {
@@ -42,10 +40,8 @@ pub fn fetch() -> Result<Weather, String> {
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={lat:.2}&longitude={lon:.2}&current=temperature_2m,weather_code,is_day&timezone=auto"
     );
-    // shortcut: no request timeout (WinRT default), add a cancel timer if fetch() ever hangs the refresh thread.
-    let body = (|| HttpClient::new()?.GetStringAsync(&Uri::CreateUri(&HSTRING::from(url))?)?.join())()
-        .map_err(|_| "offline".to_string())?;
-    parse(&body.to_string())
+    let body = crate::http::get(&url, &[]).map_err(|_| "offline".to_string())?;
+    parse(&body)
 }
 
 fn location() -> Result<(f64, f64), String> {

@@ -2,6 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod apps;
+#[allow(dead_code)]
+mod claude;
+mod http;
 mod media;
 mod status;
 mod tray;
