@@ -1,6 +1,6 @@
 [package]
 name = "pane"
-version = "0.1.0"
+version = "0.2.0"
 description = "Own Windows 11 taskbar replacement with widgets"
 edition = "2021"
 
@@ -11,14 +11,35 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+png = "0.18"
+base64 = "0.23"
 
 [dependencies.windows]
 version = "0.62"
 features = [
   "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinSock",
+  "Win32_Storage_EnhancedStorage",
+  "Win32_Storage_Packaging_Appx",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Power",
+  "Win32_System_Registry",
   "Win32_System_Threading",
+  "Win32_System_Variant",
+  "Win32_UI_Accessibility",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_Shell_PropertiesSystem",
   "Win32_UI_WindowsAndMessaging",
 ]
 
