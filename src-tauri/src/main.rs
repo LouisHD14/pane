@@ -4,6 +4,8 @@
 mod apps;
 mod status;
 mod tray;
+#[allow(dead_code)]
+mod weather;
 mod win;
 
 use std::os::windows::process::CommandExt;
