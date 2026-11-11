@@ -4,6 +4,9 @@ Own taskbar for Windows 11: a glass bar at the bottom of every monitor with Star
 
 ## Use it
 - **Install:** run `Pane_<version>_x64-setup.exe` (no admin needed). Start Pane from the Start menu.
+- **Apps:** your Windows taskbar pins, then open apps. Click to start / bring to front / minimize; right-click for its windows, "New window", "Close". Pin new apps from the Start menu (right-click → "Pin to taskbar").
+- **Status and clock:** network/volume icons open Quick Settings, the clock opens notifications and the calendar.
+- **Start with Windows:** right-click the bar → "Start with Windows".
 - **Hide / show:** Ctrl+Alt+P, or right-click the bar → "Hide Pane". The Windows taskbar comes back while Pane is hidden.
 - **Quit:** right-click the bar → "Quit Pane".
 - **Uninstall:** Settings → Apps → Installed apps → Pane → Uninstall. The taskbar comes back as it was.
@@ -25,13 +28,17 @@ Build with `npx tauri build`, not `cargo build --release`: plain cargo makes an 
 - `tools/smoke-test.ps1 -Exe <pane.exe>`: starts Pane, checks the taskbar is hidden, kills Pane hard, checks the watchdog brings the taskbar back. Prints RAM and idle CPU.
 - `tools/install-test.ps1 -Setup <setup.exe>`: silent install → start → silent uninstall, checks nothing is left behind.
 
-Both hide your taskbar for a few seconds.
+- `tools/fullscreen-test.ps1 -Exe <pane.exe>`: opens a borderless fullscreen window on the main monitor, checks only that bar hides and comes back.
+
+All of them hide your taskbar for a few seconds.
 
 ## Layout
 ```
 index.html, src/          Bar UI (TypeScript, CSS)
 src-tauri/src/main.rs     App: one bar per monitor, show/hide, watchdog, commands
-src-tauri/src/win.rs      Windows calls: hide/restore taskbar, reserve the screen edge, send keys
+src-tauri/src/win.rs      Windows calls: hide/restore taskbar, reserve the screen edge, fullscreen check, send keys
+src-tauri/src/apps.rs     Pinned + running apps, icons, activate/close/launch, window events
+src-tauri/src/status.rs   Network, volume, battery state
 src-tauri/windows/        Uninstaller hook (closes Pane, restores the taskbar)
 tools/                    Test scripts
 ```
