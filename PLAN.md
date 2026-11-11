@@ -47,12 +47,12 @@ Left side holds Spotify and Claude usage (a guess, open to change). Exact sizes 
 Needed on LOUISPC (checked 2026-11-11): Node.js 24 ✓, WebView2 ✓, **Rust (rustup) ✗**, **Visual Studio C++ Build Tools ✗**. Install both at the start of Phase 1.
 
 ## Install, uninstall, on/off (decided 2026-11-11)
-Pane must be easy to try and easy to get rid of. Windows itself is never changed: Pane only hides the taskbar while it runs.
+Pane must be easy to try and easy to get rid of. The only Windows setting Pane touches is taskbar auto-hide (needed so the taskbar frees the screen edge). The old value is saved to `%LOCALAPPDATA%\org.gruening.pane\taskbar-autohide.txt` first and given back on quit, crash, uninstall and next start.
 - **Install:** run `Pane-setup.exe` (per user, no admin needed). Pane goes into the Start menu and "Installed apps".
-- **Uninstall:** Settings → Apps → Installed apps → Pane → Uninstall. The uninstaller closes Pane first, brings the taskbar back and asks whether to delete settings too (`%APPDATA%\Pane`).
+- **Uninstall:** Settings → Apps → Installed apps → Pane → Uninstall. The uninstaller closes Pane first, brings the taskbar back and asks whether to delete Pane's data too (`%LOCALAPPDATA%\org.gruening.pane`). The program itself lives in `%LOCALAPPDATA%\Pane`.
 - **Turn off without uninstalling:** right-click Pane → "Quit Pane" (taskbar comes back at once), or a hotkey (**Ctrl+Alt+P**, toggles on/off).
 - **Start with Windows:** a switch in Pane's settings, off by default.
-- **Emergency:** if Pane hangs or is killed in Task Manager, a small watchdog brings the taskbar back. Last resort: restarting Explorer (or signing out) always restores the taskbar, because Pane never writes to Windows settings.
+- **Emergency:** if Pane hangs or is killed in Task Manager, a small watchdog brings the taskbar back. Last resort: run `"%LOCALAPPDATA%\Pane\pane.exe" --restore`, or turn off "Automatically hide the taskbar" in Settings → Personalization → Taskbar and restart Explorer.
 - Phase 1 already includes the installer, so every phase can be tried and removed this way.
 
 ## How the Windows parts work
@@ -86,6 +86,7 @@ Windows has no public weather API: the taskbar's weather comes from MSN, and the
 Each phase = one branch + PR. Gate = the user uses it daily before the next phase.
 
 1. **Skeleton:** install Rust + C++ Build Tools; Pane at the bottom of every monitor, glass, AppBar reservation, hide/restore taskbar (crash-safe), Start button, date/weekday/time block; Quit menu, Ctrl+Alt+P toggle, installer + clean uninstall. Gate: the taskbar always comes back, and install → uninstall leaves nothing behind.
+   - **Built 2026-11-11.** Checked on LOUISPC (2 monitors, 2560×1440): taskbar back after a hard kill (watchdog) and after uninstall; install → uninstall leaves no folder, no Installed-apps entry, no state file; 86 MB private RAM for both bars, 0 % CPU idle; installer 1.5 MB. `tools/smoke-test.ps1` and `tools/install-test.ps1` repeat these checks. Waiting for the user's daily-use OK.
 2. **Taskbar parity:** favorites + running apps per monitor, Quick Settings + notification buttons, fullscreen hide, autostart.
 3. **Tray icons:** own tray host as above, overflow arrow. Gate: the normal taskbar isn't missed for a week.
 4. **Spotify + weather:** Now Playing with cover/controls and a small popup with progress; temperature + icon under the time.
