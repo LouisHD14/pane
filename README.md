@@ -6,6 +6,8 @@ Own taskbar for Windows 11: a glass bar at the bottom of every monitor with Star
 - **Install:** run `Pane_<version>_x64-setup.exe` (no admin needed). Start Pane from the Start menu.
 - **Apps:** your Windows taskbar pins, then open apps. Click to start / bring to front / minimize; right-click for its windows, "New window", "Close". Pin new apps from the Start menu (right-click → "Pin to taskbar").
 - **Tray icons:** the icons Windows shows on the taskbar sit next to the status icons, the rest behind the ^ arrow. Click and right-click work like on the Windows taskbar. Which icons are visible follows Windows Settings → Personalization → Taskbar → Other system tray icons.
+- **Now Playing (left):** cover, title, artist and play/pause/next for Spotify, YouTube in the browser or any app using Windows media controls.
+- **Weather (under the time):** from your Windows location (Settings → Privacy & security → Location must allow desktop apps) and Open-Meteo. Click it for the Windows Widgets board.
 - **Status and clock:** network/volume icons open Quick Settings, the clock opens notifications and the calendar.
 - **Start with Windows:** right-click the bar → "Start with Windows".
 - **Hide / show:** Ctrl+Alt+P, or right-click the bar → "Hide Pane". The Windows taskbar comes back while Pane is hidden.
@@ -43,6 +45,8 @@ src-tauri/src/win.rs      Windows calls: hide/restore taskbar, reserve the scree
 src-tauri/src/apps.rs     Pinned + running apps, icons, activate/close/launch, window events
 src-tauri/src/status.rs   Network, volume, battery state
 src-tauri/src/tray.rs     Tray icon host (own Shell_TrayWnd, forwards everything to Explorer)
+src-tauri/src/media.rs    Now Playing (Windows media controls)
+src-tauri/src/weather.rs  Windows location + Open-Meteo
 src-tauri/windows/        Uninstaller hook (closes Pane, restores the taskbar)
 tools/                    Test scripts
 ```
