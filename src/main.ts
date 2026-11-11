@@ -6,6 +6,7 @@ import { renderTray, type TrayIcon } from "./tray";
 import { mountMedia, renderMedia, type NowPlaying } from "./media";
 import { renderWeather, type Weather } from "./weather";
 import { renderUsage, type Usage } from "./usage";
+import { once, replay } from "./anim";
 
 type WinItem = { hwnd: number; title: string; active: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
@@ -22,9 +23,14 @@ else barPage();
 function overflowPage() {
   document.body.classList.add("overflow");
   document.body.replaceChildren(Object.assign(document.createElement("div"), { id: "hidden-icons", className: "hidden-icons" }));
-  const show = (icons: TrayIcon[]) => renderTray($("hidden-icons"), icons.filter((t) => !t.promoted));
+  const show = (icons: TrayIcon[]) => {
+    renderTray($("hidden-icons"), icons.filter((t) => !t.promoted));
+    // Icons drop in one after another when the popup opens.
+    [...$("hidden-icons").children].forEach((b, i) => ((b as HTMLElement).style.animationDelay = `${i * 25}ms`));
+  };
   invoke<TrayIcon[]>("get_tray").then(show);
   me.listen<TrayIcon[]>("tray", (e) => show(e.payload));
+  window.addEventListener("focus", () => replay(document.body, "open"));
   // Close like a Windows flyout: when focus goes elsewhere (also when an app opens its tray menu).
   window.addEventListener("blur", () => invoke("close_overflow"));
   document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("close_overflow"));
@@ -34,10 +40,20 @@ function barPage() {
   // --- Clock: Windows locale decides the format, e.g. "Mi., 11. Nov." / "Wed, Nov 11".
   const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" });
   const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+  // --- Entrance: the bar rises and a light sweeps over the glass, at start and whenever Pane is shown again.
+  const enter = () => {
+    replay(document.querySelector(".bar")!, "enter");
+    replay(document.body, "shine");
+  };
+  enter();
+  me.listen("shown", enter);
+
   const tick = () => {
     const now = new Date();
     $("date").textContent = dateFmt.format(now);
-    $("time").textContent = timeFmt.format(now);
+    const time = timeFmt.format(now);
+    if ($("time").textContent && $("time").textContent !== time) once($("time"), "tick");
+    $("time").textContent = time;
     // Wake up again right after the next full minute, not every second.
     setTimeout(tick, 60_000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50);
   };
@@ -46,8 +62,26 @@ function barPage() {
   // --- Apps: pinned + running, each bar shows the windows on its own monitor.
   let apps: AppItem[] = [];
   const renderApps = (list: AppItem[]) => {
+    const box = $("apps");
+    const firstPaint = !box.children.length;
     apps = list;
-    $("apps").replaceChildren(...list.map(appButton));
+    // Reuse the buttons (keyed by app id) so indicators slide and only new/closed apps animate.
+    const current = [...box.querySelectorAll<HTMLElement>(".app:not(.leave)")];
+    const old = new Map(current.map((b) => [b.dataset.id!, b]));
+    const next = list.map((app) => {
+      const b = old.get(app.id) ?? document.createElement("button");
+      if (!old.delete(app.id) && !firstPaint) once(b, "enter");
+      updateAppButton(b, app);
+      return b;
+    });
+    // Closed apps shrink away at their old spot, then go.
+    for (const b of old.values()) {
+      next.splice(Math.min(current.indexOf(b), next.length), 0, b);
+      b.classList.add("leave");
+      b.addEventListener("animationend", () => b.remove(), { once: true });
+    }
+    // Touch the DOM only if the order changed: re-inserting restarts running animations.
+    if (next.length !== box.children.length || next.some((b, i) => box.children[i] !== b)) box.replaceChildren(...next);
   };
   invoke<AppItem[]>("get_apps").then(renderApps);
   me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
@@ -100,30 +134,30 @@ function barPage() {
   });
 }
 
-function appButton(app: AppItem) {
-  const b = document.createElement("button");
-  b.className = "app";
+/** Fills a (new or reused) app button with the app's current state. */
+function updateAppButton(b: HTMLElement, app: AppItem) {
+  b.classList.add("app");
   b.dataset.id = app.id;
   b.title = app.windows.length === 1 ? app.windows[0].title : app.name;
   b.setAttribute("aria-label", app.name);
   b.classList.toggle("running", app.windows.length > 0);
   b.classList.toggle("active", app.windows.some((w) => w.active));
-  if (app.icon) {
-    const img = document.createElement("img");
-    img.src = app.icon;
-    img.alt = "";
-    b.append(img);
-  } else {
+  const img = b.querySelector("img");
+  if (app.icon && img?.src !== app.icon) {
+    b.replaceChildren(Object.assign(document.createElement("img"), { src: app.icon, alt: "" }));
+  } else if (!app.icon) {
     b.textContent = app.name.slice(0, 1).toUpperCase();
   }
-  b.addEventListener("click", () => clickApp(app));
-  return b;
+  b.onclick = () => clickApp(app, b);
 }
 
-/** No window: start it. One window: front / minimize. Several: cycle through them. */
-function clickApp(app: AppItem) {
+/** No window: start it (icon bounces). One window: front / minimize. Several: cycle through them. */
+function clickApp(app: AppItem, b: HTMLElement) {
   const wins = app.windows;
-  if (!wins.length) return invoke("launch", { id: app.id });
+  if (!wins.length) {
+    once(b, "launch");
+    return invoke("launch", { id: app.id });
+  }
   const i = wins.findIndex((w) => w.active);
   const next = wins.length === 1 ? wins[0] : wins[(i + 1) % wins.length];
   invoke("activate", { hwnd: next.hwnd });

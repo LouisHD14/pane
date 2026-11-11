@@ -12,11 +12,19 @@
       </div>
       <div class="center">
         <button id="start" class="start" aria-label="Start">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="1" y="1" width="6.5" height="6.5" rx="1" />
-            <rect x="8.5" y="1" width="6.5" height="6.5" rx="1" />
-            <rect x="1" y="8.5" width="6.5" height="6.5" rx="1" />
-            <rect x="8.5" y="8.5" width="6.5" height="6.5" rx="1" />
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <defs>
+              <linearGradient id="start-fill" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#9eeaff" />
+                <stop offset="1" stop-color="#1d8bff" />
+              </linearGradient>
+            </defs>
+            <g fill="url(#start-fill)">
+              <rect x="1.5" y="1.5" width="9.8" height="9.8" rx="2" />
+              <rect x="12.7" y="1.5" width="9.8" height="9.8" rx="2" />
+              <rect x="1.5" y="12.7" width="9.8" height="9.8" rx="2" />
+              <rect x="12.7" y="12.7" width="9.8" height="9.8" rx="2" />
+            </g>
           </svg>
         </button>
         <div id="apps" class="apps"></div>

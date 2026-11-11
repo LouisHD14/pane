@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { replay } from "./anim";
 
 export type NowPlaying = {
   app: string;
@@ -37,6 +38,8 @@ export function mountMedia(box: HTMLElement) {
 }
 
 export function renderMedia(box: HTMLElement, np: NowPlaying | null) {
+  // A new song slides in (not on pause/play or progress updates).
+  if (np && current && (np.title !== current.title || np.artist !== current.artist)) replay(box, "change");
   current = np;
   box.hidden = !np;
   clearInterval(timer);
