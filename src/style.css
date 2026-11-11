@@ -656,6 +656,28 @@ body.overflow.open .tray-icon {
   color: var(--text-dim);
 }
 
+/* ---------- Update pill: accent, at the right end of the left section. */
+.update {
+  height: 26px;
+  margin-left: 6px;
+  padding: 0 12px;
+  border-radius: 13px;
+  background: var(--accent);
+  color: #001a2b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.update:hover,
+.update:active {
+  background-color: var(--accent);
+  filter: brightness(1.1);
+}
+
+.update.pop-in {
+  animation: pop 0.35s var(--spring);
+}
+
 /* Windows "Animation effects" off → no motion. */
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -122,6 +122,8 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
    - **Built 2026-11-11** (v0.5.0, before Phase 5, which waits for the user's OK on reading the Claude login). `usage.rs` (subagent): CPU via GetSystemTimes, RAM via GlobalMemoryStatusEx, GPU via PDH 3D-engine counters, network via GetIfTable2 deltas; no `sysinfo` crate; ~1.5 ms per sample, every 1 s, only while Pane is shown. Meters + ↓/↑ speed left of the tray; click opens Task Manager. Volume icon is its own button → Windows volume mixer.
    - Checked on LOUISPC: CPU 1 %, GPU 1 %, RAM 51 %, ↓ 12 KB/s ↑ 3 KB/s shown; pane.exe used 0.016 s CPU over 5 s; kill and install tests pass. GPU path not checked under load yet. RAM now 115 MB private (PDH loads extra DLLs into pane.exe): Phase 7 should trim it back under 100 MB.
 7. **Polish:** themes (light/dark/clear glass), settings page, signed installer, auto-update.
+   - **Auto-update built 2026-11-12** (for v0.7.0): `tauri-plugin-updater`, endpoint `releases/latest/download/latest.json` on GitHub (repo must be public). `update.rs` checks 30 s after start and every 6 h, sends "update" to the bars → accent pill "Update x.y.z" at the end of the left side; click → download, taskbar back (`set_shown(false)` on the main thread, waited for), passive NSIS install, Pane restarts. Pane menu: "Check for updates" / "Up to date". Signature key in `%USERPROFILE%\.tauri\pane-updater.key`; `tools/release.ps1` builds + writes `latest.json`. No code signing (SmartScreen may warn on first install).
+   - Not tested end to end yet: needs a first public release to update from.
 
 ## Open questions
 - Spotify + Claude on the left side: OK? (Using this guess until the user says otherwise.)

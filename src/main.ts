@@ -131,6 +131,15 @@ function barPage() {
   $("usage").addEventListener("click", () => invoke("open_task_manager"));
   $("clock").addEventListener("click", () => invoke("open_notifications"));
 
+  // --- Update: a pill when GitHub has a newer Pane; click installs it (Pane restarts).
+  me.listen<{ version: string; notes: string }>("update", (e) => showUpdate(e.payload.version, e.payload.notes));
+  $("update").addEventListener("click", async () => {
+    const pill = $("update");
+    const text = pill.textContent;
+    pill.textContent = "Updating…";
+    await invoke("install_update").catch(() => (pill.textContent = text));
+  });
+
   // --- Right-click: app menu on an app icon, Pane menu everywhere else (tray icons handle their own).
   document.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
@@ -181,10 +190,30 @@ function appMenu(app: AppItem): Item[] {
   return items;
 }
 
+/** Shows the "Update x.y.z" pill (pops in the first time). */
+function showUpdate(version: string, notes: string) {
+  const pill = $("update");
+  pill.textContent = `Update ${version}`;
+  pill.title = notes || `Install Pane ${version} and restart`;
+  if (pill.hidden) {
+    pill.hidden = false;
+    once(pill, "pop-in");
+  }
+}
+
+/** When the last manual check found nothing; the menu says "Up to date" for a minute after. */
+let upToDateAt = 0;
+
 async function paneMenu(): Promise<Item[]> {
   const auto = await invoke<boolean>("autostart");
+  const upToDate = Date.now() - upToDateAt < 60_000;
+  const check = async () => {
+    // A found update arrives as the "update" event and shows the pill.
+    if (!(await invoke<string | null>("check_update"))) upToDateAt = Date.now();
+  };
   return [
     { text: "Start with Windows", checked: auto, action: () => invoke("set_autostart", { on: !auto }) },
+    { text: upToDate ? "Up to date" : "Check for updates", enabled: !upToDate, action: check },
     { item: "Separator" },
     { text: "Hide Pane (Ctrl+Alt+P)", action: () => invoke("toggle") },
     { text: "Quit Pane", action: () => invoke("quit") },
