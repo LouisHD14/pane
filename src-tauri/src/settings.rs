@@ -26,6 +26,9 @@ pub struct Settings {
     pub show_codex: bool,
     pub show_usage: bool,
     pub show_weather: bool,
+    /// The user's own order of the pinned apps (app ids), set by dragging them in the bar. Only Pane's order:
+    /// Windows' own taskbar pins stay as they are. Empty: Windows' pin order.
+    pub pin_order: Vec<String>,
 }
 
 impl Default for Settings {
@@ -41,6 +44,7 @@ impl Default for Settings {
             show_codex: true,
             show_usage: true,
             show_weather: true,
+            pin_order: Vec::new(),
         }
     }
 }
@@ -75,13 +79,22 @@ pub fn set(key: &str, on: bool) -> Option<Settings> {
         _ => return None,
     };
     *field = on;
+    Some(save(s))
+}
+
+/// Saves the pinned apps' order (app ids, first = leftmost).
+pub fn set_pin_order(order: Vec<String>) -> Settings {
+    save(Settings { pin_order: order, ..get() })
+}
+
+fn save(s: Settings) -> Settings {
     let dir = crate::win::data_dir();
     let saved = fs::create_dir_all(&dir).and_then(|_| fs::write(path(), serde_json::to_string_pretty(&s).unwrap_or_default()));
     if let Err(e) = saved {
         crate::win::log(&format!("can't save settings: {e}"));
     }
     *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
-    Some(s)
+    s
 }
 
 #[cfg(test)]
@@ -91,6 +104,6 @@ mod tests {
     #[test]
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
-        assert!(s.autohide && s.show_media && !s.adaptive_color && !s.blend && !s.all_monitors);
+        assert!(s.autohide && s.show_media && !s.adaptive_color && !s.blend && !s.all_monitors && s.pin_order.is_empty());
     }
 }

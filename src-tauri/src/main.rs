@@ -718,6 +718,14 @@ fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settin
     Some(now)
 }
 
+/// The pinned apps' new order (app ids, left to right) after a drag in one bar; every bar gets it.
+/// Pane's own order only: Windows' taskbar pins are not touched.
+#[tauri::command]
+async fn set_pin_order(app: AppHandle, order: Vec<String>) {
+    settings::set_pin_order(order.into_iter().filter(|id| id.len() <= 2048).take(1024).collect());
+    push_apps(&app);
+}
+
 /// Keeps an auto-hidden bar up while its right-click menu is open.
 #[tauri::command]
 fn hold_bar(on: bool) {
@@ -943,6 +951,7 @@ fn main() {
             open_claude_login,
             get_settings,
             set_setting,
+            set_pin_order,
             hold_bar
         ])
         .setup(|app| {
