@@ -66,5 +66,5 @@ function drawProgress(box: HTMLElement) {
   const elapsed = current.playing ? Date.now() - current.updated_at_ms : 0;
   const share = Math.min(1, (current.position_ms + elapsed) / current.duration_ms);
   box.querySelector<HTMLElement>(".progress")!.hidden = false;
-  box.querySelector<HTMLElement>(".done")!.style.width = `${(share * 100).toFixed(2)}%`;
+  box.querySelector<HTMLElement>(".done")!.style.transform = `scaleX(${share.toFixed(4)})`;
 }
