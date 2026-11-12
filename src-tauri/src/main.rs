@@ -63,6 +63,13 @@ struct Bars(Mutex<Vec<Bar>>);
 static HOLD: AtomicBool = AtomicBool::new(false);
 
 impl Bar {
+    /// The bar window's rect: the bar itself, or with "App colour under the bar" the whole strip (the page paints
+    /// the strip in the app's colours and draws the floating bar inside it with the same margins).
+    fn window(&self, s: &settings::Settings) -> RECT {
+        let (strip, bar) = self.layout(s.fill);
+        if s.blend && !s.fill { strip } else { bar }
+    }
+
     /// (strip reserved at the bottom of the monitor, the bar window's rect) in physical px.
     fn layout(&self, fill: bool) -> (RECT, RECT) {
         let px = |logical: f64| (self.height as f64 * logical / BAR_HEIGHT).round() as i32;
@@ -131,18 +138,57 @@ fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
     on_main(app, move |h| set_shown(h, show(SHOWN.load(SeqCst))));
 }
 
+/// Running auto-hide slides: bar label -> the slide that may still move it (newer slides and place_bars win).
+static SLIDES: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
+static SLIDE_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Auto-hide: slides the whole bar window (glass and icons together) between its place `rc` and just below the
+/// monitor's bottom edge in ~120 ms, ease-out, no bounce (decided with the user 2026-11-12). Hidden at the end of
+/// a slide down and parked back at its place, so everything else still finds it where it belongs.
+fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
+    const FRAMES: i32 = 8;
+    let id = SLIDE_ID.fetch_add(1, SeqCst);
+    SLIDES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(label.clone(), id);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let (from, to) = if show { (below, rc.top) } else { (rc.top, below) };
+        for i in 0..=FRAMES {
+            let eased = 1.0 - (1.0 - i as f64 / FRAMES as f64).powi(3);
+            let top = from + ((to - from) as f64 * eased).round() as i32;
+            let label = label.clone();
+            on_main(&app, move |h| {
+                let current = SLIDES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|s| s.get(&label).copied());
+                if current != Some(id) {
+                    return; // a newer slide or place_bars took over
+                }
+                let Some(hwnd) = h.get_webview_window(&label).and_then(|w| w.hwnd().ok()).map(|h| HWND(h.0)) else { return };
+                win::pin(hwnd, Some(RECT { top, bottom: top + rc.bottom - rc.top, ..rc }));
+                win::move_to(hwnd, rc.left, top);
+                if show && i == 0 {
+                    win::show_inactive(hwnd);
+                }
+                if !show && i == FRAMES {
+                    win::hide(hwnd);
+                    win::pin(hwnd, Some(rc));
+                    win::move_to(hwnd, rc.left, rc.top);
+                }
+            });
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    });
+}
+
 /// Main thread only.
 fn place_bars(app: &AppHandle, show: bool) {
     let settings = settings::get();
+    // Settings or monitors changed: any running slide would put the bar back at an old place.
+    SLIDES.lock().unwrap_or_else(|e| e.into_inner()).take();
     for bar in bars(app).iter_mut() {
         let Some(window) = app.get_webview_window(&bar.label) else { continue };
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            let (strip, bar_rc) = bar.layout(settings.fill);
-            // "App colour under the bar": the window is the whole strip; the page paints the strip in the app's
-            // colours and draws the floating bar inside it with the same margins.
-            let rc = if settings.blend && !settings.fill { strip } else { bar_rc };
+            let (strip, rc) = (bar.layout(settings.fill).0, bar.window(&settings));
             if settings.autohide {
                 // Floats over the apps: nothing is reserved, the bar takes the same place as otherwise.
                 win::release_edge(hwnd);
@@ -328,7 +374,8 @@ fn autohide_loop(app: AppHandle) {
         std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
         let hold = HOLD.load(SeqCst) || preview::is_open();
-        let fill = settings::get().fill;
+        let settings = settings::get();
+        let fill = settings.fill;
         let mut changes = Vec::new();
         for bar in bars(&app).iter_mut() {
             let m = bar.monitor;
@@ -337,29 +384,17 @@ fn autohide_loop(app: AppHandle) {
             if bar.concealed {
                 if inside && y >= m.bottom - 2 && !bar.fullscreen {
                     (bar.concealed, bar.left_at) = (false, None);
-                    changes.push((bar.label.clone(), true));
+                    changes.push((bar.label.clone(), bar.window(&settings), m.bottom, true));
                 }
             } else if over || hold || bar.fullscreen {
                 bar.left_at = None;
             } else if bar.left_at.get_or_insert_with(Instant::now).elapsed() > Duration::from_millis(700) {
                 bar.concealed = true;
-                changes.push((bar.label.clone(), false));
+                changes.push((bar.label.clone(), bar.window(&settings), m.bottom, false));
             }
         }
-        for (label, show) in changes {
-            on_main(&app, move |h| {
-                let Some(window) = h.get_webview_window(&label) else { return };
-                if show {
-                    if let Ok(hwnd) = window.hwnd() {
-                        win::show_inactive(HWND(hwnd.0));
-                    }
-                    let _ = h.emit_to(label.as_str(), "shown", ()); // slide-in animation
-                } else {
-                    if let Ok(hwnd) = window.hwnd() {
-                        win::hide(HWND(hwnd.0));
-                    }
-                }
-            });
+        for (label, rc, below, show) in changes {
+            slide(&app, label, rc, below, show);
         }
     });
 }
