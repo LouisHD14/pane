@@ -10,6 +10,7 @@ import { once, replay } from "./anim";
 import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
 import { applyTint } from "./tint";
 import { menuPage, type Settings } from "./menu";
+import { reorderPins } from "./reorder";
 
 type WinItem = { hwnd: number; title: string; active: boolean; badge: string; badge_tip: string; flashing: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
@@ -111,7 +112,9 @@ function barPage() {
 
   // --- Apps: pinned + running, each bar shows the windows on its own monitor.
   let apps: AppItem[] = [];
+  let pending: AppItem[] | null = null; // came in during a drag, shown when it ends
   const renderApps = (list: AppItem[]) => {
+    if (reorder.dragging()) return void (pending = list);
     const box = $("apps");
     const firstPaint = !box.children.length;
     apps = list;
@@ -135,6 +138,16 @@ function barPage() {
     // Touch the DOM only if the order changed: re-inserting restarts running animations.
     if (next.length !== box.children.length || next.some((b, i) => box.children[i] !== b)) box.replaceChildren(...next);
   };
+  // Pinned apps are dragged into Pane's own order (Rust saves it and sends it to every bar).
+  const reorder = reorderPins($("apps"), {
+    start: () => closePreview(),
+    end: () => {
+      const list = pending;
+      pending = null;
+      if (list) renderApps(list);
+    },
+    save: (order) => invoke("set_pin_order", { order }),
+  });
   invoke<AppItem[]>("get_apps").then(renderApps);
   me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
 
@@ -146,7 +159,7 @@ function barPage() {
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(() => {
       const app = apps.find((a) => a.id === b.dataset.id);
-      if (!app?.windows.length || !b.matches(":hover")) return;
+      if (!app?.windows.length || !b.matches(":hover") || reorder.dragging()) return;
       const r = b.getBoundingClientRect();
       previewOpen = true;
       invoke("show_preview", { id: app.id, left: r.left, right: r.right });
@@ -225,8 +238,9 @@ function barPage() {
   // --- Right-click: app menu on an app icon, Pane menu (own popup, menu.ts) everywhere else (tray icons handle their own).
   document.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
+    if (reorder.dragging()) return;
     closePreview();
-    const id = (e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
+    const id =(e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);
     if (!app) return invoke("open_menu", { clientX: e.clientX });
     const menu = await Menu.new({ items: appMenu(app) });
@@ -243,6 +257,9 @@ function barPage() {
 /** Fills a (new or reused) app button with the app's current state. */
 function updateAppButton(b: HTMLElement, app: AppItem) {
   b.classList.add("app");
+  b.classList.toggle("pinned", app.pinned);
+  if (app.pinned) b.setAttribute("aria-keyshortcuts", "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"); // move it (reorder.ts)
+  else b.removeAttribute("aria-keyshortcuts");
   b.dataset.id = app.id;
   // The app's badge (unread count / dot) from its first window that has one, like the Windows taskbar.
   const badged = app.windows.find((w) => w.badge);
