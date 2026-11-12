@@ -794,6 +794,12 @@ fn main() {
             let handle = app.handle().clone();
             create_bars(&handle)?;
             start_watchdog();
+            // Before showing: the tray window points app badges at the window this creates.
+            let h = handle.clone();
+            apps::watch(move || {
+                push_apps(&h);
+                check_fullscreen(&h);
+            });
             set_shown(&handle, true);
             watch_loop(handle.clone());
             status_loop(handle.clone());
@@ -807,11 +813,6 @@ fn main() {
             let m = handle.clone();
             media::watch(move || {
                 let _ = m.emit("media", media::current());
-            });
-            let h = handle.clone();
-            apps::watch(move || {
-                push_apps(&h);
-                check_fullscreen(&h);
             });
             Ok(())
         })
