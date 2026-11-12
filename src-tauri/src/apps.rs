@@ -19,17 +19,21 @@ use windows::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY};
 use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+use windows::Win32::UI::Controls::{ImageList_Destroy, ImageList_GetIcon, ImageList_GetImageCount, ImageList_Read, ILD_TRANSPARENT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::{
-    IShellItem2, IShellItemImageFactory, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHLockShared,
-    SHUnlockShared, ShellExecuteW, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, SIIGBF_ICONONLY,
+    IShellItem2, IShellItemImageFactory, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHCreateMemStream,
+    SHLockShared, SHUnlockShared, ShellExecuteW, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, SIIGBF_ICONONLY,
+    THBF_DISABLED, THBF_DISMISSONCLICK, THBF_HIDDEN, THBF_NOBACKGROUND, THBF_NONINTERACTIVE, THBN_CLICKED,
+    THB_BITMAP, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTONFLAGS, THUMBBUTTONMASK,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -55,6 +59,35 @@ pub struct WinItem {
     pub badge_tip: String,
     /// The window flashes for attention (FlashWindowEx) and wasn't activated since.
     pub flashing: bool,
+    /// The app's progress on its taskbar button (ITaskbarList3::SetProgressState/Value), None if none.
+    pub progress: Option<Progress>,
+    /// The app's thumbnail toolbar (play/pause/next...), shown under its preview. Not sent to the bars.
+    #[serde(skip)]
+    pub buttons: Vec<ThumbButton>,
+}
+
+#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
+pub struct Progress {
+    /// "normal", "paused", "error" or "indeterminate".
+    pub state: &'static str,
+    /// 0..1 in 1 % steps (0 while indeterminate).
+    pub value: f32,
+}
+
+/// A thumbnail toolbar button (ITaskbarList3::ThumbBarAddButtons).
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct ThumbButton {
+    pub id: u32,
+    /// PNG data URL, "" if the app gave none.
+    pub icon: String,
+    pub tip: String,
+    pub enabled: bool,
+    /// Shown, but clicks do nothing (THBF_NONINTERACTIVE).
+    pub inert: bool,
+    /// No button frame (THBF_NOBACKGROUND).
+    pub flat: bool,
+    /// A click also closes the preview (THBF_DISMISSONCLICK).
+    pub dismiss: bool,
 }
 
 /// A taskbar pin, read from Explorer's pin list.
@@ -79,6 +112,8 @@ struct Win {
     active: bool,
     badge: Badge,
     flashing: bool,
+    progress: Option<Progress>,
+    buttons: Vec<ThumbButton>,
     /// On the monitor being listed.
     here: bool,
 }
@@ -117,6 +152,8 @@ fn group(pins: &[Pin], wins: &[Win], info: impl Fn(&Win) -> (String, String)) ->
         badge: w.badge.png.clone(),
         badge_tip: w.badge.tip.clone(),
         flashing: w.flashing,
+        progress: w.progress,
+        buttons: w.buttons.clone(),
     };
     let pin_of = |w: &Win| pins.iter().position(|p| pin_matches(p, w));
     let mut items: Vec<AppItem> = pins
@@ -196,6 +233,14 @@ pub fn close(hwnd: isize) {
     }
 }
 
+/// A click on a thumbnail toolbar button: tells the app the way Explorer does (WM_COMMAND, THBN_CLICKED).
+pub fn click_thumb_button(hwnd: isize, id: u32) {
+    let wp = (THBN_CLICKED << 16) | (id & 0xFFFF);
+    unsafe {
+        let _ = PostMessageW(Some(HWND(hwnd as _)), WM_COMMAND, WPARAM(wp as usize), LPARAM(0));
+    }
+}
+
 /// Starts an app: a pin by its shortcut, else the exe path or AppUserModelID itself.
 pub fn launch(id: &str) {
     com();
@@ -212,7 +257,8 @@ static EVENTS: OnceLock<Sender<()>> = OnceLock::new();
 static LAST_ACTIVE: Mutex<isize> = Mutex::new(0);
 
 /// Calls `on_change` (debounced ~100 ms, from any thread) when windows open/close/rename/minimize, focus changes,
-/// or an app sets a badge or flashes. Returns once the taskband window (see `taskband`) exists.
+/// or an app sets a badge, progress or preview buttons, or flashes. Returns once the taskband window (see `taskband`)
+/// exists.
 pub fn watch(on_change: impl Fn() + Send + Sync + 'static) {
     let (tx, rx) = channel();
     if EVENTS.set(tx).is_err() {
@@ -265,11 +311,12 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, obj
     changed();
 }
 
-// ---- badges and flashing: Pane's "taskband" window ----
+// ---- badges, progress, thumbnail buttons and flashing: Pane's "taskband" window ----
 //
-// Apps set badges with ITaskbarList3::SetOverlayIcon. Shell32 looks up the window in the "TaskbandHWND" property of
-// the first `Shell_TrayWnd` (Pane's own while Pane is shown, see tray.rs) and sends it WM_USER messages. This is
-// how ManagedShell (Cairo, RetroBar) does it. The same window gets the shell hook messages (HSHELL_FLASH).
+// Apps set badges with ITaskbarList3::SetOverlayIcon (progress with SetProgressState/Value, preview buttons with
+// ThumbBarAddButtons...). Shell32 looks up the window in the "TaskbandHWND" property of the first `Shell_TrayWnd`
+// (Pane's own while Pane is shown, see tray.rs) and sends it WM_USER messages. This is how ManagedShell (Cairo,
+// RetroBar) and LiteStep do it. The same window gets the shell hook messages (HSHELL_FLASH).
 
 /// One window's overlay badge.
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -280,12 +327,27 @@ struct Badge {
 
 static BADGES: Mutex<Option<HashMap<isize, Badge>>> = Mutex::new(None);
 static FLASHING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+/// Per window: (TBPFLAG, value 0..=0xFFFE).
+static PROGRESS: Mutex<Option<HashMap<isize, (u32, u16)>>> = Mutex::new(None);
+static THUMBS: Mutex<Option<HashMap<isize, Thumbs>>> = Mutex::new(None);
 static TASKBAND: AtomicIsize = AtomicIsize::new(0);
 static SHELLHOOK: AtomicU32 = AtomicU32::new(0);
 
-/// ITaskbarList messages (ManagedShell's list): wParam = the app's window, lParam = HICON / shared-memory text.
+/// ITaskbarList messages (ManagedShell's and LiteStep's lists): wParam = the app's window, lParam = HICON, a value,
+/// or a shared-memory block (SHAllocShared). Progress is posted, the rest is sent.
+const TBL_SET_PROGRESS_VALUE: u32 = WM_USER + 64;
+const TBL_SET_PROGRESS_STATE: u32 = WM_USER + 65;
+const TBL_THUMBBAR_ADD: u32 = WM_USER + 76;
+const TBL_THUMBBAR_UPDATE: u32 = WM_USER + 77;
+const TBL_THUMBBAR_IMAGES: u32 = WM_USER + 78;
 const TBL_SET_OVERLAY_ICON: u32 = WM_USER + 79;
 const TBL_SET_OVERLAY_TIP: u32 = WM_USER + 85;
+// TBPFLAG values (the windows crate has them as a typed enum; the message carries the raw number).
+const TBPF_NOPROGRESS: u32 = 0;
+const TBPF_INDETERMINATE: u32 = 1;
+const TBPF_NORMAL: u32 = 2;
+const TBPF_ERROR: u32 = 4;
+const TBPF_PAUSED: u32 = 8;
 const HSHELL_RUDEAPPACTIVATED: u32 = 0x8004;
 const HSHELL_FLASH: u32 = 0x8006;
 
@@ -345,6 +407,8 @@ unsafe extern "system" fn taskband_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
                     flashing.retain(|&w| w != window);
                     if wp.0 as u32 == HSHELL_WINDOWDESTROYED {
                         lock(&BADGES).get_or_insert_with(HashMap::new).remove(&window);
+                        lock(&PROGRESS).get_or_insert_with(HashMap::new).remove(&window);
+                        lock(&THUMBS).get_or_insert_with(HashMap::new).remove(&window);
                     }
                 }
                 _ => {}
@@ -362,14 +426,218 @@ unsafe extern "system" fn taskband_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             LRESULT(0)
         }
         TBL_SET_OVERLAY_TIP => {
-            let tip = shared_text(lp.0, pid_of(HWND(target as _)));
+            let tip = shared(lp.0, pid_of(HWND(target as _)), utf16).unwrap_or_default();
             set_badge(target, |b| b.tip = tip);
             to_explorer(msg, wp, lp);
             LRESULT(0)
         }
-        // Other ITaskbarList calls (progress, thumbnail buttons, tabs): accepted and ignored, like ManagedShell.
+        TBL_SET_PROGRESS_VALUE | TBL_SET_PROGRESS_STATE => {
+            set_progress(target, msg == TBL_SET_PROGRESS_STATE, lp.0 as u32);
+            to_explorer(msg, wp, lp);
+            LRESULT(0)
+        }
+        TBL_THUMBBAR_ADD | TBL_THUMBBAR_UPDATE => {
+            let wire = shared(lp.0, pid_of(HWND(target as _)), parse_buttons).unwrap_or_default();
+            // Read now: shell32 hands over copies of the icons that may be gone once this returns.
+            set_thumbs(target, |t| apply_buttons(&mut t.buttons, wire, msg == TBL_THUMBBAR_ADD, crate::tray::icon_png));
+            to_explorer(msg, wp, lp);
+            LRESULT(0)
+        }
+        TBL_THUMBBAR_IMAGES => {
+            let images = shared(lp.0, pid_of(HWND(target as _)), image_list).unwrap_or_default();
+            set_thumbs(target, |t| t.images = images);
+            to_explorer(msg, wp, lp);
+            LRESULT(0)
+        }
+        // Other ITaskbarList calls (tabs, thumbnail clip/tooltip): accepted and ignored, like ManagedShell.
         m if (WM_USER + 50..=WM_USER + 90).contains(&m) => LRESULT(0),
         _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+    }
+}
+
+/// SetProgressValue's lParam runs 0..=0xFFFE (shell32 scales completed/total to that). The flags are TBPFLAG.
+fn set_progress(hwnd: isize, is_state: bool, lp: u32) {
+    let mut all = lock(&PROGRESS);
+    let all = all.get_or_insert_with(HashMap::new);
+    let before = all.get(&hwnd).copied();
+    let (mut flags, mut value) = before.unwrap_or((TBPF_NOPROGRESS, 0));
+    if is_state {
+        flags = lp;
+    } else {
+        value = lp.min(0xFFFE) as u16;
+        // Like Explorer: a value turns "none" and "indeterminate" into a normal bar; error and paused stay.
+        if flags & (TBPF_ERROR | TBPF_PAUSED) == 0 {
+            flags = TBPF_NORMAL;
+        }
+    }
+    if flags == TBPF_NOPROGRESS {
+        all.remove(&hwnd);
+    } else {
+        all.insert(hwnd, (flags, value));
+    }
+    let shown = |p: Option<(u32, u16)>| p.and_then(|(f, v)| progress(f, v));
+    if shown(before) != shown(all.get(&hwnd).copied()) {
+        changed();
+    }
+}
+
+/// What the bar draws for raw (TBPFLAG, value); None for no progress. 1 % steps, so a download that reports
+/// every few KB doesn't rebuild the bar each time.
+fn progress(flags: u32, value: u16) -> Option<Progress> {
+    let state = match flags {
+        TBPF_NOPROGRESS => return None,
+        f if f & TBPF_ERROR != 0 => "error",
+        f if f & TBPF_PAUSED != 0 => "paused",
+        f if f & TBPF_INDETERMINATE != 0 => "indeterminate",
+        _ => "normal",
+    };
+    let value = if state == "indeterminate" { 0.0 } else { (value as f32 * 100.0 / 65534.0).round() / 100.0 };
+    Some(Progress { state, value })
+}
+
+/// One window's thumbnail toolbar: its buttons and the images of ThumbBarSetImageList.
+#[derive(Clone, Default, PartialEq, Debug)]
+struct Thumbs {
+    buttons: Vec<Thumb>,
+    images: Vec<String>,
+}
+
+#[derive(Clone, Default, PartialEq, Debug)]
+struct Thumb {
+    id: u32,
+    /// Index into the image list (THB_BITMAP).
+    bitmap: Option<u32>,
+    /// From the button's own HICON (THB_ICON), wins over `bitmap`.
+    icon: String,
+    tip: String,
+    flags: u32,
+}
+
+impl Thumbs {
+    /// The buttons as the preview shows them; hidden ones left out.
+    fn shown(&self) -> Vec<ThumbButton> {
+        let has = |b: &Thumb, f: THUMBBUTTONFLAGS| b.flags & f.0 as u32 != 0;
+        self.buttons
+            .iter()
+            .filter(|b| !has(b, THBF_HIDDEN))
+            .map(|b| ThumbButton {
+                id: b.id,
+                icon: if b.icon.is_empty() {
+                    b.bitmap.and_then(|i| self.images.get(i as usize)).cloned().unwrap_or_default()
+                } else {
+                    b.icon.clone()
+                },
+                tip: b.tip.clone(),
+                enabled: !has(b, THBF_DISABLED),
+                inert: has(b, THBF_NONINTERACTIVE),
+                flat: has(b, THBF_NOBACKGROUND),
+                dismiss: has(b, THBF_DISMISSONCLICK),
+            })
+            .collect()
+    }
+}
+
+fn set_thumbs(hwnd: isize, change: impl FnOnce(&mut Thumbs)) {
+    let mut all = lock(&THUMBS);
+    let all = all.get_or_insert_with(HashMap::new);
+    let before = all.get(&hwnd).cloned().unwrap_or_default();
+    let mut now = before.clone();
+    change(&mut now);
+    if now == Thumbs::default() {
+        all.remove(&hwnd);
+    } else {
+        all.insert(hwnd, now.clone());
+    }
+    if now.shown() != before.shown() {
+        changed();
+    }
+}
+
+/// THUMBBUTTON as shell32 hands it to the taskbar (found with a real ITaskbarList3 call, see the test
+/// `thumb_bar_from_shell32`): `[u32 count]` then per button 540 bytes, all fields 32 bits, also on 64-bit:
+/// mask, id, bitmap, HICON, tip `[u16; 260]`, flags.
+#[derive(Clone, Default, PartialEq, Debug)]
+struct WireButton {
+    mask: u32,
+    id: u32,
+    bitmap: u32,
+    icon: isize,
+    tip: String,
+    flags: u32,
+}
+
+const WIRE_BUTTON: usize = 540;
+
+/// The buttons in a ThumbBarAdd/UpdateButtons block. At most 7 (Windows' limit); a short block yields fewer.
+fn parse_buttons(data: &[u8]) -> Vec<WireButton> {
+    let u32_at = |b: &[u8], at: usize| b.get(at..at + 4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()));
+    let count = (u32_at(data, 0) as usize).min(7);
+    (0..count)
+        .map_while(|i| {
+            let b = data.get(4 + i * WIRE_BUTTON..4 + (i + 1) * WIRE_BUTTON)?;
+            Some(WireButton {
+                mask: u32_at(b, 0),
+                id: u32_at(b, 4),
+                bitmap: u32_at(b, 8),
+                // Window handles are 32-bit values, sign-extended on 64-bit (HandleToLong).
+                icon: u32_at(b, 12) as i32 as isize,
+                tip: utf16(&b[16..536]),
+                flags: u32_at(b, 536),
+            })
+        })
+        .collect()
+}
+
+/// Add replaces the toolbar; Update changes the fields named in each button's mask, matched by id.
+fn apply_buttons(buttons: &mut Vec<Thumb>, wire: Vec<WireButton>, add: bool, png: impl Fn(isize) -> String) {
+    if add {
+        buttons.clear();
+    }
+    let has = |w: &WireButton, m: THUMBBUTTONMASK| w.mask & m.0 as u32 != 0;
+    for w in wire {
+        let b = match buttons.iter().position(|b| b.id == w.id) {
+            Some(i) => &mut buttons[i],
+            None if add => {
+                buttons.push(Thumb { id: w.id, ..Default::default() });
+                buttons.last_mut().unwrap()
+            }
+            None => continue,
+        };
+        if has(&w, THB_BITMAP) {
+            b.bitmap = Some(w.bitmap);
+        }
+        if has(&w, THB_ICON) {
+            b.icon = if w.icon == 0 { String::new() } else { png(w.icon) };
+        }
+        if has(&w, THB_TOOLTIP) {
+            b.tip = w.tip.clone();
+        }
+        if has(&w, THB_FLAGS) {
+            b.flags = w.flags;
+        }
+    }
+}
+
+/// ThumbBarSetImageList's block: `[u32 size]` then the image list as ImageList_Write saved it.
+fn image_list(data: &[u8]) -> Vec<String> {
+    let size = data.get(..4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
+    let Some(stream) = data.get(4..4 + size).filter(|s| !s.is_empty()) else { return Vec::new() };
+    unsafe {
+        let Some(stream) = SHCreateMemStream(Some(stream)) else { return Vec::new() };
+        let list = ImageList_Read(&stream);
+        if list.is_invalid() {
+            return Vec::new();
+        }
+        let icons = (0..ImageList_GetImageCount(list).clamp(0, 64))
+            .map(|i| {
+                let icon = ImageList_GetIcon(list, i, ILD_TRANSPARENT);
+                let png = if icon.is_invalid() { String::new() } else { crate::tray::icon_png(icon.0 as isize) };
+                let _ = DestroyIcon(icon);
+                png
+            })
+            .collect();
+        let _ = ImageList_Destroy(Some(list));
+        icons
     }
 }
 
@@ -389,8 +657,8 @@ fn set_badge(hwnd: isize, change: impl FnOnce(&mut Badge)) {
     }
 }
 
-/// Explorer's taskbar gets the badge too, so it is right when Pane quits and Explorer's taskbar comes back.
-/// The icon is still valid: the app waits in SendMessage until this returns.
+/// Explorer's taskbar gets every call too, so it is right when Pane quits and Explorer's taskbar comes back.
+/// Icons and shared blocks are still valid: the app waits in SendMessage until this returns.
 fn to_explorer(msg: u32, wp: WPARAM, lp: LPARAM) {
     let Some(tray) = crate::win::tray() else { return };
     let band = unsafe { GetPropW(tray, w!("TaskbandHWND")) };
@@ -402,22 +670,34 @@ fn to_explorer(msg: u32, wp: WPARAM, lp: LPARAM) {
     }
 }
 
-/// A string an app passed as shared memory (SHAllocShared), read for the app's process.
-fn shared_text(handle: isize, pid: u32) -> String {
+/// Shared memory an app passed (SHAllocShared), locked for the app's process. `read` gets the bytes up to the end
+/// of the mapped pages, so a short (or hostile) block can't make Pane read past it.
+fn shared<T>(handle: isize, pid: u32, read: impl FnOnce(&[u8]) -> T) -> Option<T> {
     if handle == 0 || pid == 0 {
-        return String::new();
+        return None;
     }
     unsafe {
-        let p = SHLockShared(HANDLE(handle as _), pid) as *const u16;
+        let p = SHLockShared(HANDLE(handle as _), pid);
         if p.is_null() {
-            return String::new();
+            return None;
         }
-        // shortcut: reads at most 256 chars; overlay descriptions are short labels like "3 unread messages".
-        let len = (0..256).take_while(|&i| *p.add(i) != 0).count();
-        let text = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
-        let _ = SHUnlockShared(p as _);
-        text
+        let mut mem = MEMORY_BASIC_INFORMATION::default();
+        let len = match VirtualQuery(Some(p), &mut mem, size_of::<MEMORY_BASIC_INFORMATION>()) {
+            0 => 0,
+            _ => (mem.BaseAddress as usize + mem.RegionSize).saturating_sub(p as usize),
+        };
+        let out = read(std::slice::from_raw_parts(p as *const u8, len));
+        let _ = SHUnlockShared(p);
+        Some(out)
     }
+}
+
+/// A NUL-terminated UTF-16 string at the start of `bytes`.
+// shortcut: at most 260 chars (MAX_PATH, the THUMBBUTTON tip size); overlay descriptions are short labels.
+fn utf16(bytes: &[u8]) -> String {
+    let units: Vec<u16> =
+        bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take(260).take_while(|&c| c != 0).collect();
+    String::from_utf16_lossy(&units)
 }
 
 /// The foreground window, or the last one before Pane's bar took focus.
@@ -475,6 +755,8 @@ fn windows(monitor: Option<RECT>) -> Vec<Win> {
     let fg = foreground();
     let badges = lock(&BADGES).clone().unwrap_or_default();
     let flashing = lock(&FLASHING).clone();
+    let progress = lock(&PROGRESS).clone().unwrap_or_default();
+    let thumbs = lock(&THUMBS).clone().unwrap_or_default();
     let mut wins: Vec<Win> = taskbar_hwnds()
         .into_iter()
         .map(|h| {
@@ -488,6 +770,8 @@ fn windows(monitor: Option<RECT>) -> Vec<Win> {
                 active: hwnd == fg,
                 badge: badges.get(&hwnd).cloned().unwrap_or_default(),
                 flashing: flashing.contains(&hwnd) && hwnd != fg,
+                progress: progress.get(&hwnd).and_then(|&(f, v)| self::progress(f, v)),
+                buttons: thumbs.get(&hwnd).map(Thumbs::shown).unwrap_or_default(),
                 here: monitor.is_none_or(|m| monitor_of(h) == m),
             }
         })
@@ -843,6 +1127,131 @@ mod tests {
         assert_eq!(ids, ["c", "a", "b", "new1", "new2"], "saved first, new pins appended, unpinned dropped");
         let ids: Vec<_> = ordered(windows, &[]).into_iter().map(|p| p.id).collect();
         assert_eq!(ids, ["a", "b", "new1", "c", "new2"], "nothing saved: Windows' order");
+    }
+
+    #[test]
+    fn progress_follows_state_and_value() {
+        let shown = |h| lock(&PROGRESS).as_ref().and_then(|p| p.get(&h).copied()).and_then(|(f, v)| progress(f, v));
+        set_progress(-8, false, 0x7FFF); // a value alone starts a normal bar
+        assert_eq!(shown(-8), Some(Progress { state: "normal", value: 0.5 }));
+        set_progress(-8, true, TBPF_PAUSED);
+        set_progress(-8, false, 0xFFFE); // stays paused
+        assert_eq!(shown(-8), Some(Progress { state: "paused", value: 1.0 }));
+        set_progress(-8, true, TBPF_INDETERMINATE);
+        assert_eq!(shown(-8), Some(Progress { state: "indeterminate", value: 0.0 }));
+        set_progress(-8, false, 0x10000); // a value ends indeterminate; out of range is capped
+        assert_eq!(shown(-8), Some(Progress { state: "normal", value: 1.0 }));
+        set_progress(-8, true, TBPF_ERROR);
+        assert_eq!(shown(-8).unwrap().state, "error");
+        set_progress(-8, true, TBPF_NOPROGRESS);
+        assert_eq!(lock(&PROGRESS).as_ref().unwrap().get(&-8), None, "cleared and forgotten");
+    }
+
+    /// A ThumbBarAddButtons block as shell32 builds it.
+    fn wire(buttons: &[(u32, u32, u32, u32, &str, u32)]) -> Vec<u8> {
+        let mut out = (buttons.len() as u32).to_le_bytes().to_vec();
+        for &(mask, id, bitmap, icon, tip, flags) in buttons {
+            for v in [mask, id, bitmap, icon] {
+                out.extend(v.to_le_bytes());
+            }
+            let mut text = [0u16; 260];
+            tip.encode_utf16().enumerate().for_each(|(i, c)| text[i] = c);
+            out.extend(text.iter().flat_map(|c| c.to_le_bytes()));
+            out.extend(flags.to_le_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn thumb_buttons_parse_and_update() {
+        let (icon, tip, bitmap, flags) = (THB_ICON.0 as u32, THB_TOOLTIP.0 as u32, THB_BITMAP.0 as u32, THB_FLAGS.0 as u32);
+        let add = wire(&[(icon | tip, 1, 0, 0x8000_0001, "Play", 0), (bitmap | tip | flags, 2, 3, 0, "Next", 1)]);
+        let parsed = parse_buttons(&add);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!((parsed[0].icon, parsed[0].tip.as_str()), (0x8000_0001u32 as i32 as isize, "Play"), "handles sign-extend");
+        assert_eq!((parsed[1].bitmap, parsed[1].flags), (3, 1));
+        assert_eq!(parse_buttons(&add[..add.len() - 1]).len(), 1, "a cut-off button is dropped");
+        let mut huge = add.clone();
+        huge[..4].copy_from_slice(&1000u32.to_le_bytes());
+        assert_eq!(parse_buttons(&huge).len(), 2, "the count can't run past the block");
+
+        let png = |h: isize| format!("png{h:x}");
+        let mut t = Thumbs { images: vec!["i0".into(), "i1".into(), "i2".into(), "i3".into()], ..Default::default() };
+        apply_buttons(&mut t.buttons, parsed, true, png);
+        let shown = t.shown();
+        assert_eq!((shown[0].icon.as_str(), shown[0].tip.as_str(), shown[0].enabled), ("pngffffffff80000001", "Play", true));
+        assert_eq!((shown[1].icon.as_str(), shown[1].enabled), ("i3", false), "image list icon, disabled");
+        // Update: Play -> Pause (tip only, icon kept), Next hidden, unknown id ignored.
+        let hidden = THBF_HIDDEN.0 as u32;
+        apply_buttons(&mut t.buttons, parse_buttons(&wire(&[(tip, 1, 0, 0, "Pause", 0), (flags, 2, 0, 0, "", hidden), (tip, 9, 0, 0, "?", 0)])), false, png);
+        let shown = t.shown();
+        assert_eq!(shown.len(), 1);
+        assert_eq!((shown[0].icon.as_str(), shown[0].tip.as_str()), ("pngffffffff80000001", "Pause"));
+    }
+
+    /// Real ITaskbarList3 calls reach Pane's taskband the way it reads them. Runs on a private desktop, so nothing of
+    /// the user's (Explorer, a running Pane) sees the test's `Shell_TrayWnd`:
+    /// `cargo test -- --ignored thumb_bar_from_shell32 --nocapture`
+    #[test]
+    #[ignore]
+    fn thumb_bar_from_shell32() {
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+        use windows::Win32::UI::Controls::{ImageList_Create, ImageList_ReplaceIcon, ILC_COLOR32};
+        use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList, THUMBBUTTON, TBPF_PAUSED};
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn CreateDesktopW(name: PCWSTR, dev: PCWSTR, mode: *const u8, flags: u32, access: u32, sa: *const u8) -> isize;
+            fn SetThreadDesktop(desk: isize) -> i32;
+        }
+        unsafe extern "system" fn plain(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+            unsafe { DefWindowProcW(h, m, w, l) }
+        }
+        std::thread::spawn(|| unsafe {
+            let desk = CreateDesktopW(w!("PaneTest"), PCWSTR::null(), std::ptr::null(), 0, 0x1000_0000, std::ptr::null());
+            assert!(desk != 0 && SetThreadDesktop(desk) != 0, "private desktop");
+            com();
+            let inst = GetModuleHandleW(PCWSTR::null()).unwrap().into();
+            let window = |class: PCWSTR, proc: WNDPROC, style: WINDOW_STYLE| {
+                RegisterClassW(&WNDCLASSW { lpfnWndProc: proc, hInstance: inst, lpszClassName: class, ..Default::default() });
+                CreateWindowExW(WINDOW_EX_STYLE(0), class, w!("Test"), style, 0, 0, 200, 200, None, None, Some(inst), None).unwrap()
+            };
+            let tray = window(w!("Shell_TrayWnd"), Some(plain), WS_POPUP);
+            let band = window(w!("PaneTestBand"), Some(taskband_proc), WS_POPUP);
+            SetPropW(tray, w!("TaskbandHWND"), Some(HANDLE(band.0))).unwrap();
+            let app = window(w!("PaneTestApp"), Some(plain), WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+            let hwnd = app.0 as isize;
+
+            let tbl: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER).unwrap();
+            tbl.HrInit().unwrap();
+            let icon = LoadIconW(None, IDI_INFORMATION).unwrap();
+            let button = |id: u32, mask: THUMBBUTTONMASK, tip: &str| {
+                let mut b = THUMBBUTTON { dwMask: mask, iId: id, iBitmap: 1, hIcon: icon, ..Default::default() };
+                tip.encode_utf16().enumerate().for_each(|(i, c)| b.szTip[i] = c);
+                b
+            };
+            let images = ImageList_Create(16, 16, ILC_COLOR32, 2, 0);
+            ImageList_ReplaceIcon(images, -1, icon);
+            ImageList_ReplaceIcon(images, -1, icon);
+            tbl.ThumbBarSetImageList(app, images).unwrap();
+            tbl.ThumbBarAddButtons(app, &[button(7, THB_ICON | THB_TOOLTIP, "Play"), button(8, THB_BITMAP | THB_TOOLTIP, "Next")]).unwrap();
+            tbl.ThumbBarUpdateButtons(app, &[button(7, THB_TOOLTIP, "Pause")]).unwrap();
+            tbl.SetProgressValue(app, 1, 4).unwrap();
+            tbl.SetProgressState(app, TBPF_PAUSED).unwrap();
+            // Progress is posted, not sent.
+            let mut msg = MSG::default();
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                DispatchMessageW(&msg);
+            }
+
+            let shown = lock(&THUMBS).as_ref().unwrap()[&hwnd].shown();
+            let tips: Vec<_> = shown.iter().map(|b| (b.id, b.tip.as_str())).collect();
+            assert_eq!(tips, [(7, "Pause"), (8, "Next")]);
+            assert!(shown.iter().all(|b| b.icon.starts_with("data:image/png")), "icons from the HICON and the image list");
+            let (flags, value) = lock(&PROGRESS).as_ref().unwrap()[&hwnd];
+            assert_eq!(progress(flags, value), Some(Progress { state: "paused", value: 0.25 }));
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

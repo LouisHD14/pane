@@ -1,7 +1,7 @@
 //! Live previews: hovering a running app's icon shows a small glass popup above it with a DWM thumbnail of each of
 //! the app's windows. One worker thread owns the popup, so callers (Tauri commands, the main thread) never wait.
 
-use crate::apps::AppItem;
+use crate::apps::{AppItem, ThumbButton, WinItem};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -25,6 +25,9 @@ pub struct Card {
     pub body: [f64; 4],
     /// DWM draws a live image; false for minimized windows (the page shows the app icon instead).
     pub live: bool,
+    /// The app's thumbnail toolbar (play/pause...), drawn in `bar` (relative to the card).
+    pub buttons: Vec<ThumbButton>,
+    pub bar: [f64; 4],
 }
 
 #[derive(Serialize, Clone, PartialEq, Debug)]
@@ -60,6 +63,8 @@ const CARD_W: f64 = 216.0;
 const INNER: f64 = 8.0;
 const TITLE_H: f64 = 22.0;
 const THUMB_H: f64 = 124.0;
+/// Row under the image for thumbnail toolbar buttons, only when a window has some.
+const BAR_H: f64 = 32.0;
 
 pub fn start(app: AppHandle) {
     let (tx, rx) = channel();
@@ -149,7 +154,7 @@ fn run(app: AppHandle, rx: Receiver<Cmd>) {
             Some(Cmd::Apps { bar, apps }) => {
                 if let Some(o) = open.take_if(|o| o.bar.label() == bar) {
                     match apps.into_iter().find(|a| a.id == o.app.id && !a.windows.is_empty()) {
-                        Some(a) if a.windows == o.app.windows => open = Some(o),
+                        Some(a) if same_cards(&a.windows, &o.app.windows) => open = Some(o),
                         Some(a) => {
                             let (bar, monitor, left, right) = (o.bar.clone(), o.monitor, o.left, o.right);
                             open = place(&app, Some(o), bar, monitor, a, left, right);
@@ -248,7 +253,7 @@ fn place(
     let scale = bar.scale_factor().unwrap_or(1.0);
     let margin = (8.0 * scale).round() as i32;
     let max_w = ((monitor.right - monitor.left - 2 * margin) as f64 / scale).max(CARD_W);
-    let (w, h, slots) = layout(&sizes, max_w);
+    let (w, h, slots) = layout(&sizes, max_w, item.windows.iter().any(|w| !w.buttons.is_empty()));
     let (pw, ph) = ((w * scale).round() as i32, (h * scale).round() as i32);
     let anchor = RECT {
         left: bar_pos.x + (left * scale).round() as i32,
@@ -291,6 +296,8 @@ fn place(
                 rect: s.card,
                 body: s.body,
                 live: s.thumb.is_some(),
+                buttons: w.buttons.clone(),
+                bar: s.bar,
             })
             .collect(),
     };
@@ -346,6 +353,13 @@ fn unregister(thumbs: &mut Vec<(isize, Option<isize>)>) {
     }
 }
 
+/// What the popup shows of the windows is unchanged (badges and progress are the bar's business: a download
+/// shouldn't redraw an open preview every few percent).
+fn same_cards(a: &[WinItem], b: &[WinItem]) -> bool {
+    let card = |w: &WinItem| (w.hwnd, w.title.clone(), w.active, w.buttons.clone());
+    a.iter().map(card).eq(b.iter().map(card))
+}
+
 /// The cursor counts as "still here" over the icon, the popup, and the gap between them.
 fn inside((x, y): (i32, i32), anchor: RECT, popup: RECT) -> bool {
     let within = |r: RECT| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
@@ -361,15 +375,19 @@ struct Slot {
     body: [f64; 4],
     /// The live image, relative to the popup (aspect kept, centred in the body), if the window has one.
     thumb: Option<[f64; 4]>,
+    /// The toolbar row under the body, relative to the card (zero height without toolbars).
+    bar: [f64; 4],
 }
 
-/// Cards side by side for windows of the given source sizes; shrunk to fit `max_w`. Returns (width, height, slots).
+/// Cards side by side for windows of the given source sizes; shrunk to fit `max_w`. `toolbar`: a window has
+/// thumbnail buttons, so every card gets a row for them (cards stay the same height). Returns (width, height, slots).
 // shortcut: one row only; dozens of windows get small cards. A second row would need a smarter layout.
-fn layout(sizes: &[Option<(f64, f64)>], max_w: f64) -> (f64, f64, Vec<Slot>) {
+fn layout(sizes: &[Option<(f64, f64)>], max_w: f64, toolbar: bool) -> (f64, f64, Vec<Slot>) {
     let n = sizes.len() as f64;
     let natural = 2.0 * PAD + n * CARD_W + (n - 1.0).max(0.0) * GAP;
     let s = (max_w / natural).min(1.0);
-    let card_h = 2.0 * INNER + TITLE_H + THUMB_H;
+    let bar_h = if toolbar { BAR_H } else { 0.0 };
+    let card_h = 2.0 * INNER + TITLE_H + THUMB_H + bar_h;
     let (bw, bh) = (CARD_W - 2.0 * INNER, THUMB_H);
     let slots = sizes
         .iter()
@@ -382,7 +400,12 @@ fn layout(sizes: &[Option<(f64, f64)>], max_w: f64) -> (f64, f64, Vec<Slot>) {
                 let (tw, th) = (sw * k, sh * k);
                 [x + bx + (bw - tw) / 2.0, y + by + (bh - th) / 2.0, tw, th].map(|v| v * s)
             });
-            Slot { card: [x, y, CARD_W, card_h].map(|v| v * s), body: [bx, by, bw, bh].map(|v| v * s), thumb }
+            Slot {
+                card: [x, y, CARD_W, card_h].map(|v| v * s),
+                body: [bx, by, bw, bh].map(|v| v * s),
+                thumb,
+                bar: [bx, by + bh, bw, bar_h].map(|v| v * s),
+            }
         })
         .collect();
     (natural * s, (2.0 * PAD + card_h) * s, slots)
@@ -394,8 +417,9 @@ mod tests {
 
     #[test]
     fn cards_keep_aspect_and_fit() {
-        let (w, h, slots) = layout(&[Some((1600.0, 900.0)), None], 10_000.0);
+        let (w, h, slots) = layout(&[Some((1600.0, 900.0)), None], 10_000.0, false);
         assert_eq!((w, h), (2.0 * PAD + 2.0 * CARD_W + GAP, 2.0 * PAD + 2.0 * INNER + TITLE_H + THUMB_H));
+        assert_eq!(slots[0].bar[3], 0.0, "no toolbar row");
         // 16:9 in a 200 x 124 box: full width, centred vertically.
         let [x, y, tw, th] = slots[0].thumb.unwrap();
         assert_eq!((x, tw, th), (PAD + INNER, 200.0, 112.5));
@@ -403,10 +427,32 @@ mod tests {
         assert_eq!(slots[1].card[0], PAD + CARD_W + GAP);
         assert_eq!(slots[1].thumb, None, "minimized: no live image");
         // Small windows aren't blown up.
-        assert_eq!(layout(&[Some((100.0, 50.0))], 10_000.0).2[0].thumb.unwrap()[2..], [100.0, 50.0]);
+        assert_eq!(layout(&[Some((100.0, 50.0))], 10_000.0, false).2[0].thumb.unwrap()[2..], [100.0, 50.0]);
         // Too many for the screen: everything shrinks to fit.
-        let (w, _, slots) = layout(&vec![Some((800.0, 600.0)); 20], 1000.0);
+        let (w, _, slots) = layout(&vec![Some((800.0, 600.0)); 20], 1000.0, false);
         assert!((w - 1000.0).abs() < 1e-9 && slots[19].card[0] + slots[19].card[2] < 1000.0);
+        // Thumbnail buttons: a row under the image, the image itself doesn't move.
+        let (_, tall, with_bar) = layout(&[Some((1600.0, 900.0))], 10_000.0, true);
+        assert_eq!(tall, h + BAR_H);
+        assert_eq!(with_bar[0].thumb, layout(&[Some((1600.0, 900.0))], 10_000.0, false).2[0].thumb);
+        assert_eq!(with_bar[0].bar, [INNER, INNER + TITLE_H + THUMB_H, CARD_W - 2.0 * INNER, BAR_H]);
+    }
+
+    #[test]
+    fn progress_and_badges_dont_redraw_the_preview() {
+        let w = WinItem {
+            hwnd: 1,
+            title: "Download".into(),
+            active: false,
+            badge: String::new(),
+            badge_tip: String::new(),
+            flashing: false,
+            progress: None,
+            buttons: vec![],
+        };
+        let busy = WinItem { progress: Some(crate::apps::Progress { state: "normal", value: 0.4 }), badge: "x".into(), ..w.clone() };
+        assert!(same_cards(&[w.clone()], &[busy]));
+        assert!(!same_cards(&[w.clone()], &[WinItem { title: "Done".into(), ..w }]));
     }
 
     #[test]
