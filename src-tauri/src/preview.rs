@@ -112,7 +112,8 @@ struct Open {
     /// The page has loaded (asked for its content).
     ready: bool,
     visible: bool,
-    thumbs: Vec<isize>,
+    /// Per shown window: (source hwnd, its thumbnail if it has a live image).
+    thumbs: Vec<(isize, Option<isize>)>,
     /// Physical px: the hovered icon and the popup.
     anchor: RECT,
     rect: RECT,
@@ -193,10 +194,7 @@ fn place(
         return None;
     }
     let mut o = match reuse {
-        Some(mut o) => {
-            unregister(&mut o.thumbs);
-            o
-        }
+        Some(o) => o,
         None => {
             let popup = match create(app) {
                 Ok(p) => p,
@@ -227,17 +225,18 @@ fn place(
     };
     let dest = HWND(dest.0);
     // Minimized windows have no current image (DWM would show an empty frame): those get the app icon.
-    let thumbs: Vec<Option<isize>> = item
-        .windows
-        .iter()
-        .map(|w| {
-            let src = HWND(w.hwnd as _);
-            if unsafe { IsIconic(src) }.as_bool() {
-                return None;
-            }
-            unsafe { DwmRegisterThumbnail(dest, src) }.ok()
-        })
-        .collect();
+    let wanted: Vec<(isize, bool)> =
+        item.windows.iter().map(|w| (w.hwnd, !unsafe { IsIconic(HWND(w.hwnd as _)) }.as_bool())).collect();
+    // Same windows as shown (only a title or focus changed, e.g. a terminal's spinning title): keep the
+    // thumbnails, so the live images don't flicker on every change.
+    if !o.thumbs.iter().map(|(h, t)| (*h, t.is_some())).eq(wanted.iter().copied()) {
+        unregister(&mut o.thumbs);
+        o.thumbs = wanted
+            .iter()
+            .map(|&(h, live)| (h, live.then(|| unsafe { DwmRegisterThumbnail(dest, HWND(h as _)) }.ok()).flatten()))
+            .collect();
+    }
+    let thumbs: Vec<Option<isize>> = o.thumbs.iter().map(|(_, t)| *t).collect();
     let sizes: Vec<Option<(f64, f64)>> = thumbs
         .iter()
         .map(|t| {
@@ -245,7 +244,6 @@ fn place(
             (size.cx > 0 && size.cy > 0).then_some((size.cx as f64, size.cy as f64))
         })
         .collect();
-    o.thumbs = thumbs.iter().flatten().copied().collect();
 
     let scale = bar.scale_factor().unwrap_or(1.0);
     let margin = (8.0 * scale).round() as i32;
@@ -258,10 +256,13 @@ fn place(
         top: bar_pos.y,
         bottom: bar_pos.y + bar_size.height as i32,
     };
-    let x = ((anchor.left + anchor.right) / 2 - pw / 2).clamp(monitor.left + margin, (monitor.right - margin - pw).max(monitor.left));
+    // max(lo): clamp panics when the popup is wider than the room (rounding), which would kill the worker.
+    let lo = monitor.left + margin;
+    let x = ((anchor.left + anchor.right) / 2 - pw / 2).clamp(lo, (monitor.right - margin - pw).max(lo));
     let y = bar_pos.y - ph - margin;
-    let _ = o.popup.set_size(PhysicalSize::new(pw as u32, ph as u32));
+    // Position first: moving onto a monitor with another DPI rescales the window, the size then fixes it.
     let _ = o.popup.set_position(PhysicalPosition::new(x, y));
+    let _ = o.popup.set_size(PhysicalSize::new(pw as u32, ph as u32));
 
     let px = |v: f64| (v * scale).round() as i32;
     for (t, slot) in thumbs.iter().zip(&slots) {
@@ -339,8 +340,8 @@ fn close(app: &AppHandle, open: Option<Open>) {
     let _ = app.emit_to(o.bar.label(), "preview-closed", ());
 }
 
-fn unregister(thumbs: &mut Vec<isize>) {
-    for t in thumbs.drain(..) {
+fn unregister(thumbs: &mut Vec<(isize, Option<isize>)>) {
+    for t in thumbs.drain(..).filter_map(|(_, t)| t) {
         let _ = unsafe { DwmUnregisterThumbnail(t) };
     }
 }
