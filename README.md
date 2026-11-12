@@ -1,26 +1,58 @@
-# Pane
+![Pane: a glass taskbar with widgets for Windows 11](docs/banner.png)
 
-Own taskbar for Windows 11: a glass bar at the bottom of every monitor with Start, apps and widgets. The plan and phases are in [`PLAN.md`](PLAN.md).
+Pane replaces the Windows 11 taskbar with a glass bar that keeps everything the taskbar does and adds small widgets.
 
-## Use it
-- **Install:** run `Pane_<version>_x64-setup.exe` (no admin needed). Start Pane from the Start menu.
-- **Apps:** your Windows taskbar pins, then open apps. Click to start / bring to front / minimize; right-click for its windows, "New window", "Close". Pin new apps from the Start menu (right-click → "Pin to taskbar").
-- **Tray icons:** the icons Windows shows on the taskbar sit next to the status icons, the rest behind the ^ arrow. Click and right-click work like on the Windows taskbar. Which icons are visible follows Windows Settings → Personalization → Taskbar → Other system tray icons.
-- **Now Playing (left):** cover, title, artist and play/pause/next for Spotify, YouTube in the browser or any app using Windows media controls.
-- **Weather (under the time):** from your Windows location (Settings → Privacy & security → Location must allow desktop apps) and Open-Meteo. Click it for the Windows Widgets board.
-- **Claude usage (left):** your 5-hour and weekly Claude limits with reset times (from Claude Code's login on this PC); click for the usage page. When the stored login has expired, Pane renews it like Claude Code does and saves the new token back to `~/.claude/.credentials.json`; if that is no longer possible the widget says "Log in" and a click opens `claude /login`.
-- **Codex usage (left):** the same for Codex (ChatGPT plan), from the Codex CLI's login (`~/.codex/auth.json`, renewed the same way). Right-click the bar → "Add Codex login…" opens `codex login` in a terminal; the widget appears once you are logged in.
-- **System load:** CPU / GPU / RAM meters with % (the same numbers as Task Manager: CPU utility, and GPU as the busiest engine, so video decoding on an Intel iGPU counts) and download/upload speed (hidden on narrow screens); click for Task Manager.
-- **Settings:** right-click the bar → Settings: auto-hide (the bar floats over apps and slides away; touch the bottom edge of the screen to bring it back), match the colour of the apps above the bar, and show/hide each widget. Saved in `%LOCALAPPDATA%org.gruening.panesettings.json`.
-- **Status and clock:** the network icon opens Quick Settings, the volume icon the per-app volume mixer, the clock notifications and the calendar.
-- **Start with Windows:** right-click the bar → "Start with Windows".
-- **Hide / show:** Ctrl+Alt+P, or right-click the bar → "Hide Pane". The Windows taskbar comes back while Pane is hidden.
-- **Updates:** Pane checks GitHub releases 30 s after start and every 6 hours. A new version shows an "Update x.y.z" pill on the left; click it to install (the Windows taskbar comes back while the installer runs, then the new Pane starts). Right-click the bar → "Check for updates" to check now.
-- **Quit:** right-click the bar → "Quit Pane".
-- **Uninstall:** Settings → Apps → Installed apps → Pane → Uninstall. The taskbar comes back as it was.
-- **If the taskbar ever stays hidden:** run `"%LOCALAPPDATA%\Pane\pane.exe" --restore`.
+![The Pane bar at the bottom of the screen](docs/bar.png)
 
-## Build
+## Features
+- **Start:** the Windows button opens the real Start menu.
+- **Pinned and running apps:** your Windows taskbar pins, then open apps, centered like Windows 11. Click to start, bring to front or minimize. Right-click for the app's windows, "New window" and "Close". Pin new apps from the Start menu (right-click > "Pin to taskbar").
+- **Tray icons:** the icons Windows shows on the taskbar, the rest behind the ^ arrow. Click and right-click work as usual. Which icons are visible follows Windows Settings > Personalization > Taskbar > Other system tray icons.
+- **Media:** cover, title, artist and play/pause/next for Spotify, YouTube in the browser, or any app that uses the Windows media controls.
+- **Claude usage:** your 5-hour and weekly Claude limits with reset times, from Claude Code's login on this PC. Click for the usage page.
+- **Codex usage:** the same for Codex (ChatGPT plan), from the Codex CLI's login. Right-click the bar > "Add Codex login…" to log in.
+- **CPU / GPU / RAM:** small meters with the same numbers as Task Manager. Click for Task Manager.
+- **Network:** download and upload speed (hidden on narrow screens).
+- **Weather:** temperature and an icon under the clock, from your Windows location and Open-Meteo. Location must be allowed for desktop apps (Settings > Privacy & security > Location).
+- **Date and time:** click for notifications and the calendar. The network and volume icons open Quick Settings and the volume mixer.
+- **Auto-hide:** the bar can float over apps and slide away; touch the bottom edge to bring it back.
+- **Adaptive colour:** the bar can match the colour of the apps above it.
+- **Settings:** right-click the bar > Settings: auto-hide, adaptive colour, and show or hide each widget.
+- **Auto-update:** Pane checks GitHub Releases for new versions. A new one shows an "Update x.y.z" pill; click it to install.
+- **Every monitor:** one bar per monitor, each with its own windows. Pane hides on a monitor where a fullscreen app or game is in front.
+
+## Install
+1. Download `Pane_x.y.z_x64-setup.exe` from [Releases](https://github.com/LouisHD14/pane/releases/latest).
+2. Run it. It installs for your user only, no admin needed.
+3. Start Pane from the Start menu. To start it with Windows: right-click the bar > "Start with Windows".
+
+Windows SmartScreen may warn because the installer is not code-signed. Click "More info" > "Run anyway".
+
+## Turn it off
+- **Quit:** right-click the bar > "Quit Pane". The Windows taskbar comes back at once.
+- **Hide / show:** press Ctrl+Alt+P. The Windows taskbar comes back while Pane is hidden.
+
+## Uninstall
+Settings > Apps > Installed apps > Pane > Uninstall. The uninstaller closes Pane, brings the taskbar back as it was, and asks whether to delete Pane's data too.
+
+## Safety
+The normal taskbar always comes back.
+- The only Windows setting Pane changes is taskbar auto-hide. Pane saves the old value first and gives it back on quit, crash, uninstall and next start.
+- A small watchdog process brings the taskbar back if Pane crashes or is ended in Task Manager.
+- If the taskbar ever stays hidden, run:
+  ```
+  "%LOCALAPPDATA%\Pane\pane.exe" --restore
+  ```
+  Or turn off "Automatically hide the taskbar" in Settings > Personalization > Taskbar.
+
+## Privacy
+- The Claude and Codex widgets read the logins that Claude Code (`~/.claude/.credentials.json`) and the Codex CLI (`~/.codex/auth.json`) already keep on your PC. Pane never logs them.
+- These logins are only sent to Anthropic (`api.anthropic.com`, `platform.claude.com`) and OpenAI (`chatgpt.com`, `auth.openai.com`) to read your usage. When a login has expired, Pane renews it the same way the CLI does and saves it back to the same file.
+- Weather uses your rounded location and asks [Open-Meteo](https://open-meteo.com). No key, no account.
+- Updates are checked on GitHub.
+- Nothing else leaves your PC. Settings and logs stay in `%LOCALAPPDATA%\org.gruening.pane`.
+
+## Build from source
 Needs Node.js 22+, Rust (rustup) and the Visual Studio C++ Build Tools.
 
 ```sh
@@ -32,24 +64,22 @@ cd src-tauri && cargo test
 
 Build with `npx tauri build`, not `cargo build --release`: plain cargo makes an exe that loads the UI from the dev server and shows an empty bar.
 
-## Release
-Needs the updater key at `%USERPROFILE%\.tauri\pane-updater.key` (see `CLAUDE.md`).
+The build ends with an updater signing error if you don't have the release key. The exe and installer are still built.
 
-1. `tools/release.ps1 -Version x.y.z -Notes "What changed"`: bumps the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, builds the signed installer and writes `latest.json` next to it.
-2. Commit and merge the version bump to `main`.
-3. Run the `gh release create ...` command the script prints. Don't mark the release as prerelease: Pane reads `releases/latest/download/latest.json`, and GitHub's "latest" skips prereleases.
+### Test scripts
+These start Pane and hide your taskbar for a few seconds. Quit your own Pane first.
+- `tools/smoke-test.ps1 -Exe <pane.exe>`: checks the taskbar is hidden, kills Pane hard, checks the watchdog brings the taskbar back. Prints RAM and idle CPU.
+- `tools/install-test.ps1 -Setup <setup.exe>`: silent install, start, silent uninstall; checks nothing is left behind.
+- `tools/fullscreen-test.ps1 -Exe <pane.exe>`: checks the bar hides for a fullscreen window and comes back.
+- `tools/tray-test.ps1 -Exe <pane.exe> -Out <prefix>`: counts the tray icons and saves screenshots of the tray popup.
 
-## Check
-- `tools/smoke-test.ps1 -Exe <pane.exe>`: starts Pane, checks the taskbar is hidden, kills Pane hard, checks the watchdog brings the taskbar back. Prints RAM and idle CPU.
-- `tools/install-test.ps1 -Setup <setup.exe>`: silent install → start → silent uninstall, checks nothing is left behind.
+### Release (maintainer)
+Needs the updater key at `%USERPROFILE%\.tauri\pane-updater.key`.
+1. `tools/release.ps1 -Version x.y.z -Notes "What changed"` bumps the versions, builds the signed installer and writes `latest.json`.
+2. Merge the version bump to `main`.
+3. Run the `gh release create ...` command the script prints. Not as a prerelease: Pane reads `releases/latest`.
 
-- `tools/fullscreen-test.ps1 -Exe <pane.exe>`: opens a borderless fullscreen window on the main monitor, checks only that bar hides and comes back.
-
-- `tools/tray-test.ps1 -Exe <pane.exe> -Out <prefix>`: counts the bar's tray icons, clicks the ^ arrow and saves screenshots of the bar, the popup and Explorer's tray afterwards (uses `tools/eval.mjs` and the WebView2 debug port).
-
-All of them hide your taskbar for a few seconds.
-
-## Layout
+### Layout
 ```
 index.html, src/          Bar UI (TypeScript, CSS)
 src-tauri/src/main.rs     App: one bar per monitor, show/hide, watchdog, commands
@@ -60,11 +90,22 @@ src-tauri/src/tray.rs     Tray icon host (own Shell_TrayWnd, forwards everything
 src-tauri/src/media.rs    Now Playing (Windows media controls)
 src-tauri/src/weather.rs  Windows location + Open-Meteo
 src-tauri/src/usage.rs    CPU / GPU / RAM load and network speed
-src-tauri/src/claude.rs   Claude plan limits (Claude Code login, renewed when expired) or local token count
+src-tauri/src/claude.rs   Claude plan limits (Claude Code login, renewed when expired)
 src-tauri/src/codex.rs    Codex plan limits (Codex CLI login, renewed when expired)
 src-tauri/src/settings.rs Right-click Settings (auto-hide, adaptive colour, widget switches)
 src-tauri/src/http.rs     Small HTTPS GET/POST (ureq)
 src-tauri/src/update.rs   Auto-update from GitHub releases
 src-tauri/windows/        Uninstaller hook (closes Pane, restores the taskbar)
+docs/                     README images; banner.html renders banner.png
 tools/                    Test scripts, release.ps1
 ```
+
+The plan and design notes are in [`PLAN.md`](PLAN.md).
+
+## License
+No license has been chosen yet. Until there is one, the code is visible but not licensed for reuse.
+
+## Credits
+- Inspired by [LumaBar](https://lumabar.xyz). Pane has its own design and code.
+- The tray icon host follows the technique of [ManagedShell](https://github.com/cairoshell/ManagedShell) and [RetroBar](https://github.com/dremin/RetroBar).
+- Built with [Tauri](https://tauri.app). Weather data by [Open-Meteo](https://open-meteo.com).
