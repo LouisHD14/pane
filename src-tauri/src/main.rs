@@ -268,11 +268,12 @@ static LAST_APPS: Mutex<Option<HashMap<String, Vec<apps::AppItem>>>> = Mutex::ne
 /// (focus, title, redraw); before, every one of them re-rendered every bar.
 fn push_apps(app: &AppHandle) {
     let targets: Vec<(String, RECT)> = bars(app).iter().map(|b| (b.label.clone(), b.monitor)).collect();
+    let all = settings::get().all_monitors;
     let mut last = LAST_APPS.lock().unwrap_or_else(|e| e.into_inner());
     let last = last.get_or_insert_with(HashMap::new);
     last.retain(|label, _| targets.iter().any(|(l, _)| l == label));
     for (label, monitor) in targets {
-        let now = apps::list(monitor);
+        let now = apps::list((!all).then_some(monitor));
         if last.get(&label) != Some(&now) {
             let _ = app.emit_to(label.as_str(), "apps", &now);
             preview::apps_changed(&label, &now);
@@ -527,7 +528,8 @@ fn quit(app: AppHandle) {
 #[tauri::command]
 async fn get_apps(app: AppHandle, window: WebviewWindow) -> Vec<apps::AppItem> {
     let monitor = bars(&app).iter().find(|b| b.label == window.label()).map(|b| b.monitor);
-    monitor.map(apps::list).unwrap_or_default()
+    let all = settings::get().all_monitors;
+    monitor.map(|m| apps::list((!all).then_some(m))).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -666,6 +668,9 @@ fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settin
     let _ = app.emit("settings", &now);
     if matches!(key.as_str(), "autohide" | "fill" | "blend") && SHOWN.load(SeqCst) {
         on_main(&app, |h| place_bars(h, true));
+    }
+    if key == "all_monitors" {
+        push_apps(&app);
     }
     if key == "show_codex" && on {
         let h = app.clone();

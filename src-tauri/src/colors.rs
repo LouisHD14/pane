@@ -17,6 +17,9 @@ const MAX_ZONES: usize = 3;
 const MIN_ZONE: usize = 5; // ~15 % of the width
 /// Two colours count as the same when no channel differs by more than this.
 const SAME: u8 = 24;
+/// Rows read above the app's bottom edge. Browsers end in a 2-3 px grey frame line; over 12 rows the page's
+/// own colour wins (with 3 rows the line won: black Netflix and GitHub's dark page came out grey, 2026-11-12).
+const ROWS: i32 = 12;
 /// Readings in a row that must agree before a new colour is shown (one every 0.75 s: ~1.5-2 s).
 const STEADY: u32 = 3;
 
@@ -34,7 +37,8 @@ pub fn app_floor(monitor: RECT, strip: RECT, bands: usize) -> Option<Vec<Rgb>> {
     }
     // Its own bottom rows, but never under the bar (an auto-hidden bar floats over the app).
     let (x0, x1, y) = (b.left.max(monitor.left), b.right.min(monitor.right), b.bottom.min(strip.top));
-    let (w, h, px) = crate::win::screen_pixels(x0, y - 3, x1 - x0, 3)?;
+    let rows = ROWS.min(b.bottom - b.top);
+    let (w, h, px) = crate::win::screen_pixels(x0, y - rows, x1 - x0, rows)?;
     let cells: Vec<Rgb> = (0..CELLS).map(|i| dominant(&px, w, h, i * w / CELLS, ((i + 1) * w / CELLS).max(i * w / CELLS + 1))).collect();
     Some(to_bands(&zones(&cells), x0, x1, strip.left, strip.right, bands))
 }

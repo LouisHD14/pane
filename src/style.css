@@ -156,7 +156,8 @@ body.shine::after {
   grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   height: 100%;
-  padding: 0 6px;
+  /* 4 px on the right: the date block keeps the same 4 px gap to the right edge as to the top and bottom. */
+  padding: 0 4px 0 6px;
   box-sizing: border-box;
   white-space: nowrap;
 }
@@ -682,10 +683,10 @@ body.preview {
   flex-direction: column;
   justify-content: center;
   flex-shrink: 0;
-  height: 40px;
+  height: 40px; /* bar 48 px: 4 px above and below, as on the right */
   background: var(--glass);
   border: 1px solid var(--glass-border);
-  border-radius: 10px;
+  border-radius: 5px; /* follows the bar's 8 px corner 4 px further in (was 10 px: rounder than the bar) */
   box-sizing: border-box;
   overflow: hidden;
   transition: background-color 0.18s var(--ease), transform 0.15s var(--ease);
