@@ -492,7 +492,22 @@ body.preview {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  /* Rust caps the window at the space above the bar; the rest scrolls. */
+  max-height: 100vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
   animation: drop 0.22s var(--ease);
+}
+
+/* Rows keep their height; a long list scrolls instead of squeezing them. */
+.menu > * {
+  flex: none;
+}
+
+.menu-more {
+  margin-left: auto;
+  padding-left: 18px;
+  color: var(--text-dim);
 }
 
 .menu-heading {
