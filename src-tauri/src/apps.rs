@@ -273,16 +273,11 @@ fn windows(monitor: RECT) -> Vec<Win> {
                     return None;
                 }
             }
-            let exe = exe_of(pid);
-            let aumid = window_aumid(h).or_else(|| {
-                // Store apps run inside ApplicationFrameHost; the app itself owns a child window.
-                let pid = if exe.ends_with("\\applicationframehost.exe") { child_pid(h, pid) } else { pid };
-                process_aumid(pid)
-            });
+            let (exe, aumid) = identity(h, pid);
             Some(Win {
                 hwnd: h.0 as isize,
                 title,
-                aumid: aumid.unwrap_or_default(),
+                aumid,
                 exe,
                 active: h.0 as isize == fg,
                 here: monitor_of(h) == monitor,
@@ -298,6 +293,35 @@ fn windows(monitor: RECT) -> Vec<Win> {
     }
     wins.sort_by_key(|w| seen.iter().position(|s| *s == w.hwnd));
     wins
+}
+
+/// (exe, AppUserModelID) per window, cached by (hwnd, pid). The list is rebuilt on every title change and focus
+/// switch (several times a second while a browser loads or a terminal prints), and reading these for every
+/// window each time (COM property store, process queries) was the main source of Pane's lag.
+static IDENTITY: OnceLock<Mutex<HashMap<(isize, u32), (String, String)>>> = OnceLock::new();
+
+fn identity(h: HWND, pid: u32) -> (String, String) {
+    let cache = IDENTITY.get_or_init(Default::default);
+    let key = (h.0 as isize, pid);
+    if let Some(hit) = cache.lock().unwrap().get(&key) {
+        return hit.clone();
+    }
+    let exe = exe_of(pid);
+    let aumid = window_aumid(h).or_else(|| {
+        // Store apps run inside ApplicationFrameHost; the app itself owns a child window.
+        let pid = if exe.ends_with("\\applicationframehost.exe") { child_pid(h, pid) } else { pid };
+        process_aumid(pid)
+    });
+    // Store frames get their app's child window a moment after they open: don't cache "no AUMID" for them.
+    let found = (exe, aumid.unwrap_or_default());
+    if !(found.1.is_empty() && found.0.ends_with("\\applicationframehost.exe")) {
+        let mut map = cache.lock().unwrap();
+        if map.len() > 512 {
+            map.clear(); // closed windows; cheaper than tracking them
+        }
+        map.insert(key, found.clone());
+    }
+    found
 }
 
 fn text(h: HWND) -> String {

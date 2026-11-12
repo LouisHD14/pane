@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Menu, type MenuItemOptions, type CheckMenuItemOptions, type PredefinedMenuItemOptions } from "@tauri-apps/api/menu";
+import {
+  Menu,
+  type MenuItemOptions,
+  type CheckMenuItemOptions,
+  type PredefinedMenuItemOptions,
+  type SubmenuOptions,
+} from "@tauri-apps/api/menu";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
@@ -7,11 +13,30 @@ import { mountMedia, renderMedia, type NowPlaying } from "./media";
 import { renderWeather, type Weather } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
-import { renderClaude, setClaudeLogo, type ClaudeUsage } from "./claude";
+import { renderClaude, renderCodex, setClaudeLogo, claudeState, codexState, type ClaudeUsage, type CodexUsage } from "./claude";
+import { applyTint } from "./tint";
 
 type WinItem = { hwnd: number; title: string; active: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
-type Item = MenuItemOptions | CheckMenuItemOptions | PredefinedMenuItemOptions;
+type Item = MenuItemOptions | CheckMenuItemOptions | PredefinedMenuItemOptions | SubmenuOptions;
+type Settings = {
+  autohide: boolean;
+  adaptive_color: boolean;
+  show_media: boolean;
+  show_claude: boolean;
+  show_codex: boolean;
+  show_usage: boolean;
+  show_weather: boolean;
+};
+
+/** Widget switches hide their widget with a class on <body> (the widget keeps updating, it's just not shown). */
+const WIDGETS = ["media", "claude", "codex", "usage", "weather"] as const;
+let settings: Settings | null = null;
+function applySettings(s: Settings) {
+  settings = s;
+  for (const w of WIDGETS) document.body.classList.toggle(`no-${w}`, !s[`show_${w}`]);
+  if (!s.adaptive_color) applyTint(null);
+}
 
 const me = getCurrentWebviewWindow();
 const $ = (id: string) => document.getElementById(id)!;
@@ -108,7 +133,17 @@ function barPage() {
   invoke<ClaudeUsage | null>("get_claude").then((u) => renderClaude($("claude"), u));
   invoke<string>("claude_icon").then((url) => url && setClaudeLogo(url));
   me.listen<ClaudeUsage | null>("claude", (e) => renderClaude($("claude"), e.payload));
-  $("claude").addEventListener("click", () => invoke("open_claude_usage"));
+  $("claude").addEventListener("click", () => invoke($("claude").classList.contains("relogin") ? "open_claude_login" : "open_claude_usage"));
+
+  // --- Codex plan usage (shown when the Codex CLI is logged in with ChatGPT); a click opens chatgpt.com's usage.
+  invoke<CodexUsage | null>("get_codex").then((u) => renderCodex($("codex"), u));
+  me.listen<CodexUsage | null>("codex", (e) => renderCodex($("codex"), e.payload));
+  $("codex").addEventListener("click", () => invoke($("codex").classList.contains("relogin") ? "open_codex_login" : "open_codex_usage"));
+
+  // --- Settings (right-click menu) and the adaptive colour of the apps above the bar.
+  invoke<Settings>("get_settings").then(applySettings);
+  me.listen<Settings>("settings", (e) => applySettings(e.payload));
+  me.listen<[number, number, number][] | null>("tint", (e) => applyTint(settings?.adaptive_color ? e.payload : null));
 
   // --- Weather under the time; a click opens the Windows Widgets board with the full forecast.
   invoke<Weather | null>("get_weather").then((w) => renderWeather($("weather"), w));
@@ -146,7 +181,13 @@ function barPage() {
     const id = (e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);
     const menu = await Menu.new({ items: app ? appMenu(app) : await paneMenu() });
-    await menu.popup();
+    // Auto-hide must not slide the bar away while its menu is open.
+    await invoke("hold_bar", { on: true });
+    try {
+      await menu.popup();
+    } finally {
+      invoke("hold_bar", { on: false });
+    }
   });
 }
 
@@ -211,7 +252,38 @@ async function paneMenu(): Promise<Item[]> {
     // A found update arrives as the "update" event and shows the pill.
     if (!(await invoke<string | null>("check_update"))) upToDateAt = Date.now();
   };
+  const s = settings ?? (await invoke<Settings>("get_settings"));
+  const flip = (key: keyof Settings, text: string): CheckMenuItemOptions => ({
+    text,
+    checked: s[key],
+    action: () => invoke("set_setting", { key, on: !s[key] }),
+  });
+  const codexIn = await invoke<boolean>("codex_logged_in");
+  const claude = claudeState();
+  const codex = codexState();
+  const logins: Item[] = [
+    {
+      text: codexIn ? (codex?.source === "error" ? "Log in to Codex again…" : "Codex: switch account…") : "Add Codex login…",
+      action: () => invoke("open_codex_login"),
+    },
+  ];
+  if (claude?.source === "local") logins.unshift({ text: "Log in to Claude Code again…", action: () => invoke("open_claude_login") });
   return [
+    {
+      text: "Settings",
+      items: [
+        flip("autohide", "Auto-hide the bar"),
+        flip("adaptive_color", "Match the colour of apps"),
+        { item: "Separator" },
+        flip("show_media", "Show Now Playing"),
+        flip("show_claude", "Show Claude usage"),
+        flip("show_codex", "Show Codex usage"),
+        flip("show_usage", "Show CPU / GPU / RAM"),
+        flip("show_weather", "Show weather"),
+      ],
+    },
+    ...logins,
+    { item: "Separator" },
     { text: "Start with Windows", checked: auto, action: () => invoke("set_autostart", { on: !auto }) },
     { text: upToDate ? "Up to date" : "Check for updates", enabled: !upToDate, action: check },
     { item: "Separator" },
