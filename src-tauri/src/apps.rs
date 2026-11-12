@@ -3,11 +3,12 @@
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering::SeqCst};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use windows::core::{w, Interface, HSTRING, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, PROPERTYKEY, RECT, SIZE, WPARAM};
+use windows::core::{w, Interface, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, PROPERTYKEY, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetMonitorInfoW, GetObjectW, MonitorFromRect, ReleaseDC, BITMAP, BITMAPINFO,
@@ -17,6 +18,7 @@ use windows::Win32::Storage::EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_FileDe
 use windows::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY};
 use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -26,8 +28,8 @@ use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::{
-    IShellItem2, IShellItemImageFactory, SHCreateItemFromIDList, SHCreateItemFromParsingName, ShellExecuteW,
-    SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, SIIGBF_ICONONLY,
+    IShellItem2, IShellItemImageFactory, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHLockShared,
+    SHUnlockShared, ShellExecuteW, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, SIIGBF_ICONONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -47,6 +49,12 @@ pub struct WinItem {
     pub hwnd: isize,
     pub title: String,
     pub active: bool,
+    /// The app's overlay badge (ITaskbarList3::SetOverlayIcon, e.g. an unread count) as a PNG data URL, "" if none.
+    pub badge: String,
+    /// What the badge means ("3 unread messages"), "" if the app gave no text.
+    pub badge_tip: String,
+    /// The window flashes for attention (FlashWindowEx) and wasn't activated since.
+    pub flashing: bool,
 }
 
 /// A taskbar pin, read from Explorer's pin list.
@@ -69,6 +77,8 @@ struct Win {
     aumid: String,
     exe: String,
     active: bool,
+    badge: Badge,
+    flashing: bool,
     /// On the monitor being listed.
     here: bool,
 }
@@ -92,7 +102,14 @@ pub fn list(monitor: RECT) -> Vec<AppItem> {
 
 /// Pins and windows -> taskbar items. `wins` come in first-seen order; `info` gives (name, icon) of an unpinned app.
 fn group(pins: &[Pin], wins: &[Win], info: impl Fn(&Win) -> (String, String)) -> Vec<AppItem> {
-    let item = |w: &Win| WinItem { hwnd: w.hwnd, title: w.title.clone(), active: w.active };
+    let item = |w: &Win| WinItem {
+        hwnd: w.hwnd,
+        title: w.title.clone(),
+        active: w.active,
+        badge: w.badge.png.clone(),
+        badge_tip: w.badge.tip.clone(),
+        flashing: w.flashing,
+    };
     let pin_of = |w: &Win| pins.iter().position(|p| pin_matches(p, w));
     let mut items: Vec<AppItem> = pins
         .iter()
@@ -137,11 +154,19 @@ fn pin_matches(p: &Pin, w: &Win) -> bool {
 /// Taskbar click on an app window: if it is the foreground window -> minimize; else restore if minimized and bring to front.
 pub fn activate(hwnd: isize) {
     let h = HWND(hwnd as _);
-    unsafe {
-        if foreground() == hwnd && !IsIconic(h).as_bool() {
+    if foreground() == hwnd && !unsafe { IsIconic(h) }.as_bool() {
+        unsafe {
             let _ = ShowWindow(h, SW_MINIMIZE);
-            return;
         }
+        return;
+    }
+    bring_to_front(hwnd);
+}
+
+/// Restores the window if minimized and puts it in front (a click on its preview: never minimizes).
+pub fn bring_to_front(hwnd: isize) {
+    let h = HWND(hwnd as _);
+    unsafe {
         if IsIconic(h).as_bool() {
             let _ = ShowWindow(h, SW_RESTORE);
         }
@@ -178,7 +203,8 @@ static EVENTS: OnceLock<Sender<()>> = OnceLock::new();
 /// Last foreground window outside Pane, so clicking the bar doesn't count as the app losing focus.
 static LAST_ACTIVE: Mutex<isize> = Mutex::new(0);
 
-/// Calls `on_change` (debounced ~100 ms, from any thread) when windows open/close/rename/minimize or focus changes.
+/// Calls `on_change` (debounced ~100 ms, from any thread) when windows open/close/rename/minimize, focus changes,
+/// or an app sets a badge or flashes. Returns once the taskband window (see `taskband`) exists.
 pub fn watch(on_change: impl Fn() + Send + Sync + 'static) {
     let (tx, rx) = channel();
     if EVENTS.set(tx).is_err() {
@@ -191,7 +217,9 @@ pub fn watch(on_change: impl Fn() + Send + Sync + 'static) {
             on_change();
         }
     });
-    std::thread::spawn(|| unsafe {
+    let (ready, created) = channel();
+    std::thread::spawn(move || unsafe {
+        let _ = ready.send(create_taskband());
         for (min, max) in [
             (EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE), // destroy, show, hide
             (EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE),
@@ -206,6 +234,15 @@ pub fn watch(on_change: impl Fn() + Send + Sync + 'static) {
             DispatchMessageW(&msg);
         }
     });
+    if created.recv().unwrap_or(0) == 0 {
+        crate::win::log("can't create the taskband window: no badges or flashing");
+    }
+}
+
+fn changed() {
+    if let Some(tx) = EVENTS.get() {
+        let _ = tx.send(());
+    }
 }
 
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, obj: i32, child: i32, _: u32, _: u32) {
@@ -214,9 +251,164 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, obj
     }
     if event == EVENT_SYSTEM_FOREGROUND {
         *LAST_ACTIVE.lock().unwrap() = hwnd.0 as isize;
+        // Like Explorer: a window stops asking for attention once the user brings it to front.
+        lock(&FLASHING).retain(|&w| w != hwnd.0 as isize);
     }
-    if let Some(tx) = EVENTS.get() {
-        let _ = tx.send(());
+    changed();
+}
+
+// ---- badges and flashing: Pane's "taskband" window ----
+//
+// Apps set badges with ITaskbarList3::SetOverlayIcon. Shell32 looks up the window in the "TaskbandHWND" property of
+// the first `Shell_TrayWnd` (Pane's own while Pane is shown, see tray.rs) and sends it WM_USER messages. This is
+// how ManagedShell (Cairo, RetroBar) does it. The same window gets the shell hook messages (HSHELL_FLASH).
+
+/// One window's overlay badge.
+#[derive(Clone, Default, PartialEq, Debug)]
+struct Badge {
+    png: String,
+    tip: String,
+}
+
+static BADGES: Mutex<Option<HashMap<isize, Badge>>> = Mutex::new(None);
+static FLASHING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+static TASKBAND: AtomicIsize = AtomicIsize::new(0);
+static SHELLHOOK: AtomicU32 = AtomicU32::new(0);
+
+/// ITaskbarList messages (ManagedShell's list): wParam = the app's window, lParam = HICON / shared-memory text.
+const TBL_SET_OVERLAY_ICON: u32 = WM_USER + 79;
+const TBL_SET_OVERLAY_TIP: u32 = WM_USER + 85;
+const HSHELL_RUDEAPPACTIVATED: u32 = 0x8004;
+const HSHELL_FLASH: u32 = 0x8006;
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The window ITaskbarList calls should reach (0 if it couldn't be made). tray.rs puts it on Pane's `Shell_TrayWnd`.
+pub fn taskband() -> isize {
+    TASKBAND.load(SeqCst)
+}
+
+/// Tells every taskbar window its button exists ("TaskbarButtonCreated", as Explorer does), so apps send their
+/// badges again, now to Pane. Done each time Pane is shown, like ManagedShell does at start.
+pub fn announce() {
+    let msg = unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) };
+    for h in taskbar_hwnds() {
+        unsafe {
+            let _ = SendNotifyMessageW(h, msg, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+unsafe fn create_taskband() -> isize {
+    unsafe {
+        let instance = GetModuleHandleW(PCWSTR::null()).unwrap_or_default().into();
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(taskband_proc),
+            hInstance: instance,
+            lpszClassName: w!("PaneTaskband"),
+            ..Default::default()
+        };
+        RegisterClassW(&class);
+        // A hidden tool window, never on the bar (shell hooks are meant for top-level windows, not message-only ones).
+        let Ok(hwnd) =
+            CreateWindowExW(WS_EX_TOOLWINDOW, w!("PaneTaskband"), w!(""), WS_POPUP, 0, 0, 0, 0, None, None, Some(instance), None)
+        else {
+            return 0;
+        };
+        SHELLHOOK.store(RegisterWindowMessageW(w!("SHELLHOOK")), SeqCst);
+        let _ = RegisterShellHookWindow(hwnd);
+        TASKBAND.store(hwnd.0 as isize, SeqCst);
+        hwnd.0 as isize
+    }
+}
+
+unsafe extern "system" fn taskband_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let target = wp.0 as isize;
+    match msg {
+        m if m != 0 && m == SHELLHOOK.load(SeqCst) => {
+            let window = lp.0;
+            let mut flashing = lock(&FLASHING);
+            let before = flashing.len();
+            match wp.0 as u32 {
+                HSHELL_FLASH if window != foreground() && !flashing.contains(&window) => flashing.push(window),
+                HSHELL_WINDOWACTIVATED | HSHELL_RUDEAPPACTIVATED | HSHELL_WINDOWDESTROYED => {
+                    flashing.retain(|&w| w != window);
+                    if wp.0 as u32 == HSHELL_WINDOWDESTROYED {
+                        lock(&BADGES).get_or_insert_with(HashMap::new).remove(&window);
+                    }
+                }
+                _ => {}
+            }
+            if flashing.len() != before {
+                changed();
+            }
+            LRESULT(0)
+        }
+        TBL_SET_OVERLAY_ICON => {
+            // Read now: the app may destroy the icon as soon as this returns.
+            let png = if lp.0 == 0 { String::new() } else { crate::tray::icon_png(lp.0) };
+            set_badge(target, |b| b.png = png);
+            to_explorer(msg, wp, lp);
+            LRESULT(0)
+        }
+        TBL_SET_OVERLAY_TIP => {
+            let tip = shared_text(lp.0, pid_of(HWND(target as _)));
+            set_badge(target, |b| b.tip = tip);
+            to_explorer(msg, wp, lp);
+            LRESULT(0)
+        }
+        // Other ITaskbarList calls (progress, thumbnail buttons, tabs): accepted and ignored, like ManagedShell.
+        m if (WM_USER + 50..=WM_USER + 90).contains(&m) => LRESULT(0),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+    }
+}
+
+fn set_badge(hwnd: isize, change: impl FnOnce(&mut Badge)) {
+    let mut badges = lock(&BADGES);
+    let badges = badges.get_or_insert_with(HashMap::new);
+    let before = badges.get(&hwnd).cloned().unwrap_or_default();
+    let mut now = before.clone();
+    change(&mut now);
+    if now == Badge::default() {
+        badges.remove(&hwnd);
+    } else {
+        badges.insert(hwnd, now.clone());
+    }
+    if now != before {
+        changed();
+    }
+}
+
+/// Explorer's taskbar gets the badge too, so it is right when Pane quits and Explorer's taskbar comes back.
+/// The icon is still valid: the app waits in SendMessage until this returns.
+fn to_explorer(msg: u32, wp: WPARAM, lp: LPARAM) {
+    let Some(tray) = crate::win::tray() else { return };
+    let band = unsafe { GetPropW(tray, w!("TaskbandHWND")) };
+    if band.is_invalid() || band.0 as isize == taskband() {
+        return;
+    }
+    unsafe {
+        let _ = SendMessageTimeoutW(HWND(band.0), msg, wp, lp, SMTO_ABORTIFHUNG, 1000, None);
+    }
+}
+
+/// A string an app passed as shared memory (SHAllocShared), read for the app's process.
+fn shared_text(handle: isize, pid: u32) -> String {
+    if handle == 0 || pid == 0 {
+        return String::new();
+    }
+    unsafe {
+        let p = SHLockShared(HANDLE(handle as _), pid) as *const u16;
+        if p.is_null() {
+            return String::new();
+        }
+        // shortcut: reads at most 256 chars; overlay descriptions are short labels like "3 unread messages".
+        let len = (0..256).take_while(|&i| *p.add(i) != 0).count();
+        let text = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+        let _ = SHUnlockShared(p as _);
+        text
     }
 }
 
@@ -246,7 +438,8 @@ fn is_taskbar_window(visible: bool, cloaked: bool, owned: bool, ex_style: WINDOW
 /// Every hwnd seen so far, in order of first appearance (EnumWindows order is z-order, which changes on every click).
 static SEEN: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
-fn windows(monitor: RECT) -> Vec<Win> {
+/// The windows that get a taskbar button, in z-order.
+fn taskbar_hwnds() -> Vec<HWND> {
     unsafe extern "system" fn add(h: HWND, all: LPARAM) -> windows::core::BOOL {
         unsafe { (*(all.0 as *mut Vec<HWND>)).push(h) };
         true.into()
@@ -256,32 +449,39 @@ fn windows(monitor: RECT) -> Vec<Win> {
         let _ = EnumWindows(Some(add), LPARAM(&mut all as *mut _ as isize));
     }
     let me = std::process::id();
+    all.retain(|&h| {
+        let title = text(h);
+        unsafe {
+            let mut cloaked = 0u32;
+            let _ = DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, 4);
+            let owned = GetWindow(h, GW_OWNER).is_ok();
+            let ex = WINDOW_EX_STYLE(GetWindowLongPtrW(h, GWL_EXSTYLE) as u32);
+            is_taskbar_window(IsWindowVisible(h).as_bool(), cloaked != 0, owned, ex, &title)
+                && !(pid_of(h) == me && title == "Pane")
+        }
+    });
+    all
+}
+
+fn windows(monitor: RECT) -> Vec<Win> {
     let fg = foreground();
-    let mut wins: Vec<Win> = all
+    let badges = lock(&BADGES).clone().unwrap_or_default();
+    let flashing = lock(&FLASHING).clone();
+    let mut wins: Vec<Win> = taskbar_hwnds()
         .into_iter()
-        .filter_map(|h| {
-            let title = text(h);
-            let pid = pid_of(h);
-            unsafe {
-                let mut cloaked = 0u32;
-                let _ = DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, 4);
-                let owned = GetWindow(h, GW_OWNER).is_ok();
-                let ex = WINDOW_EX_STYLE(GetWindowLongPtrW(h, GWL_EXSTYLE) as u32);
-                if !is_taskbar_window(IsWindowVisible(h).as_bool(), cloaked != 0, owned, ex, &title)
-                    || (pid == me && title == "Pane")
-                {
-                    return None;
-                }
-            }
-            let (exe, aumid) = identity(h, pid);
-            Some(Win {
-                hwnd: h.0 as isize,
-                title,
+        .map(|h| {
+            let hwnd = h.0 as isize;
+            let (exe, aumid) = identity(h, pid_of(h));
+            Win {
+                hwnd,
+                title: text(h),
                 aumid,
                 exe,
-                active: h.0 as isize == fg,
+                active: hwnd == fg,
+                badge: badges.get(&hwnd).cloned().unwrap_or_default(),
+                flashing: flashing.contains(&hwnd) && hwnd != fg,
                 here: monitor_of(h) == monitor,
-            })
+            }
         })
         .collect();
     let mut seen = SEEN.lock().unwrap();
@@ -607,6 +807,23 @@ mod tests {
         assert_eq!(ids, [("chrome", vec![2]), ("Spotify!App", vec![]), ("c:\\code.exe", vec![1, 5])]);
         assert!(items[0].pinned && !items[2].pinned);
         assert_eq!(items[2].name, "name of c:\\code.exe");
+    }
+
+    #[test]
+    fn badges_set_and_clear_per_window() {
+        let badge = |h| lock(&BADGES).as_ref().and_then(|b| b.get(&h).cloned());
+        set_badge(-7, |b| b.png = "data:1".into());
+        set_badge(-7, |b| b.tip = "3 unread".into());
+        assert_eq!(badge(-7), Some(Badge { png: "data:1".into(), tip: "3 unread".into() }));
+        set_badge(-7, |b| b.png = String::new());
+        set_badge(-7, |b| b.tip = String::new());
+        assert_eq!(badge(-7), None, "a cleared badge is forgotten");
+        // The badge reaches the bar on the window's item.
+        let mut w = win(1, "c:\\chat.exe", "", true);
+        (w.badge, w.flashing) = (Badge { png: "data:2".into(), tip: "1 new".into() }, true);
+        let items = group(&[], &[w], |_| ("Chat".into(), String::new()));
+        let item = &items[0].windows[0];
+        assert_eq!((item.badge.as_str(), item.badge_tip.as_str(), item.flashing), ("data:2", "1 new", true));
     }
 
     #[test]
