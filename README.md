@@ -17,7 +17,7 @@ Pane replaces the Windows 11 taskbar with a glass bar that keeps everything the 
 - **Date and time:** click for notifications and the calendar. The network and volume icons open Quick Settings and the volume mixer.
 - **Auto-hide:** the bar can float over apps and slide away; touch the bottom edge to bring it back.
 - **Adaptive colour:** the bar can match the colour of the apps above it.
-- **Settings:** right-click the bar > Settings: auto-hide, adaptive colour, and show or hide each widget.
+- **Settings:** right-click the bar > Settings for the quick switches (auto-hide, adaptive colour, each widget); "More settings…" opens the settings window, which also has glass lightness, bar height (small / normal / large) and the auto-hide timing.
 - **Auto-update:** Pane checks GitHub Releases for new versions. A new one shows an "Update x.y.z" pill; click it to install.
 - **Every monitor:** one bar per monitor, each with its own windows. Pane hides on a monitor where a fullscreen app or game is in front.
 
@@ -81,7 +81,7 @@ Needs the updater key at `%USERPROFILE%\.tauri\pane-updater.key`.
 
 ### Layout
 ```
-index.html, src/          Bar UI (TypeScript, CSS)
+index.html, src/          Bar UI, popups and settings window (TypeScript, CSS)
 src-tauri/src/main.rs     App: one bar per monitor, show/hide, watchdog, commands
 src-tauri/src/win.rs      Windows calls: hide/restore taskbar, reserve the screen edge, fullscreen check, send keys
 src-tauri/src/apps.rs     Pinned + running apps, icons, activate/close/launch, window events
@@ -92,7 +92,7 @@ src-tauri/src/weather.rs  Windows location + Open-Meteo
 src-tauri/src/usage.rs    CPU / GPU / RAM load and network speed
 src-tauri/src/claude.rs   Claude plan limits (Claude Code login, renewed when expired)
 src-tauri/src/codex.rs    Codex plan limits (Codex CLI login, renewed when expired)
-src-tauri/src/settings.rs Right-click Settings (auto-hide, adaptive colour, widget switches)
+src-tauri/src/settings.rs Settings (switches, glass lightness, bar height, auto-hide timing), checked and clamped
 src-tauri/src/http.rs     Small HTTPS GET/POST (ureq)
 src-tauri/src/update.rs   Auto-update from GitHub releases
 src-tauri/windows/        Uninstaller hook (closes Pane, restores the taskbar)
