@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the bar windows may use: the context menu and Pane's own commands.",
-  "windows": ["bar-*", "overflow-*"],
+  "windows": ["bar-*", "overflow-*", "preview-*"],
   "permissions": ["core:default"]
 }

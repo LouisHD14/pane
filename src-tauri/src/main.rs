@@ -6,6 +6,7 @@ mod claude;
 mod codex;
 mod http;
 mod media;
+mod preview;
 mod settings;
 mod status;
 mod tray;
@@ -90,6 +91,7 @@ fn set_shown(app: &AppHandle, show: bool) {
             });
         });
     } else {
+        preview::hide();
         tray::stop();
         place_bars(app, false);
         win::restore_taskbar(&dir);
@@ -187,6 +189,7 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
 
 /// Monitors were plugged in/out or changed resolution: replace all bars. Main thread only.
 fn rebuild_bars(app: &AppHandle) {
+    preview::hide();
     let old: Vec<String> = bars(app).iter().map(|b| b.label.clone()).collect();
     for label in old {
         if let Some(window) = app.get_webview_window(&label) {
@@ -250,6 +253,7 @@ fn push_apps(app: &AppHandle) {
         let now = apps::list(monitor);
         if last.get(&label) != Some(&now) {
             let _ = app.emit_to(label.as_str(), "apps", &now);
+            preview::apps_changed(&label, &now);
             last.insert(label, now);
         }
     }
@@ -300,7 +304,7 @@ fn autohide_loop(app: AppHandle) {
         let on = SHOWN.load(SeqCst) && settings::get().autohide;
         std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
-        let hold = HOLD.load(SeqCst);
+        let hold = HOLD.load(SeqCst) || preview::is_open();
         let mut changes = Vec::new();
         for bar in bars(&app).iter_mut() {
             let m = bar.monitor;
@@ -516,6 +520,37 @@ fn activate(hwnd: isize) {
 #[tauri::command]
 fn close_window(hwnd: isize) {
     apps::close(hwnd);
+}
+
+/// Hover preview of an app's windows above its icon; `left`/`right` are the icon's edges in CSS px in the bar.
+#[tauri::command]
+async fn show_preview(app: AppHandle, window: WebviewWindow, id: String, left: f64, right: f64) {
+    let Some(monitor) = bars(&app).iter().find(|b| b.label == window.label()).map(|b| b.monitor) else { return };
+    let item = LAST_APPS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|all| {
+        all.get(window.label()).and_then(|list| list.iter().find(|a| a.id == id).cloned())
+    });
+    if let Some(item) = item {
+        preview::show(window, monitor, item, left, right);
+    }
+}
+
+// Async (not on the main thread) like every preview call, so they never wait on it.
+#[tauri::command]
+async fn hide_preview() {
+    preview::hide();
+}
+
+/// The preview page asks what to show once it has loaded.
+#[tauri::command]
+async fn get_preview(window: WebviewWindow) -> Option<preview::Preview> {
+    preview::ready(window.label())
+}
+
+/// A click on a preview: that window to the front (never minimizes, unlike a click on the icon).
+#[tauri::command]
+fn focus_window(hwnd: isize) {
+    apps::bring_to_front(hwnd);
+    preview::hide();
 }
 
 #[tauri::command]
@@ -763,6 +798,10 @@ fn main() {
             get_status,
             activate,
             close_window,
+            show_preview,
+            hide_preview,
+            get_preview,
+            focus_window,
             launch,
             get_media,
             media_control,
@@ -794,6 +833,7 @@ fn main() {
             let handle = app.handle().clone();
             create_bars(&handle)?;
             start_watchdog();
+            preview::start(handle.clone());
             // Before showing: the tray window points app badges at the window this creates.
             let h = handle.clone();
             apps::watch(move || {

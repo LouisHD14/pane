@@ -423,6 +423,55 @@ body.overflow.open .tray-icon {
   animation: drop 0.32s var(--spring) backwards;
 }
 
+/* ---------- Window previews: glass popup above an app icon; DWM draws each live image into a card's body. */
+body.preview {
+  animation: fade 0.15s var(--ease);
+}
+
+.card {
+  position: absolute;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+}
+
+/* No press shrink: the live image is drawn by DWM at a fixed place and wouldn't shrink with the card. */
+.card:active {
+  transform: none;
+}
+
+.card.active {
+  box-shadow: inset 0 0 0 1px var(--glass-border);
+}
+
+.card-title {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.card-body {
+  position: absolute;
+  border-radius: 4px;
+}
+
+.card-body.minimized {
+  display: grid;
+  place-items: center;
+  background: var(--glass);
+}
+
+.card-body img {
+  width: 40px;
+  height: 40px;
+  opacity: 0.85;
+}
+
 @keyframes drop {
   from { transform: translateY(8px) scale(0.8); opacity: 0; }
   to { transform: none; opacity: 1; }
