@@ -3,8 +3,10 @@
 
 mod apps;
 mod claude;
+mod codex;
 mod http;
 mod media;
+mod settings;
 mod status;
 mod tray;
 mod update;
@@ -14,8 +16,9 @@ mod win;
 
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -45,8 +48,19 @@ struct Bar {
     height: i32,
     /// Hidden because a fullscreen app (game, video) is in front on this monitor.
     fullscreen: bool,
+    /// Auto-hide: slid away until the mouse touches the bottom edge.
+    concealed: bool,
+    /// Auto-hide: when the mouse left the bar (it hides a moment later).
+    left_at: Option<Instant>,
 }
 struct Bars(Mutex<Vec<Bar>>);
+
+/// Auto-hide: keeps the bar up while its menu or the hidden-icons popup is open.
+static HOLD: AtomicBool = AtomicBool::new(false);
+
+fn gap_of(bar: &Bar) -> i32 {
+    (bar.height as f64 * GAP / BAR_HEIGHT).round() as i32
+}
 
 fn bars(app: &AppHandle) -> MutexGuard<'_, Vec<Bar>> {
     app.state::<Bars>().inner().0.lock().unwrap_or_else(|e| e.into_inner())
@@ -104,18 +118,28 @@ fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
 
 /// Main thread only.
 fn place_bars(app: &AppHandle, show: bool) {
-    for bar in bars(app).iter() {
+    let autohide = settings::get().autohide;
+    for bar in bars(app).iter_mut() {
         let Some(window) = app.get_webview_window(&bar.label) else { continue };
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            // Reserve bar + a gap above and below, then float the bar inside with the gap on all sides.
-            let gap = (bar.height as f64 * GAP / BAR_HEIGHT).round() as i32;
-            let rc = win::reserve_edge(hwnd, bar.monitor, bar.height + 2 * gap);
+            let gap = gap_of(bar);
+            let rc = if autohide {
+                // Floats over the apps: nothing is reserved, the bar takes the same place as otherwise.
+                win::release_edge(hwnd);
+                RECT { top: bar.monitor.bottom - bar.height - 2 * gap, ..bar.monitor }
+            } else {
+                // Reserve bar + a gap above and below, then float the bar inside with the gap on all sides.
+                win::reserve_edge(hwnd, bar.monitor, bar.height + 2 * gap)
+            };
             let _ = window.set_position(PhysicalPosition::new(rc.left + gap, rc.top + gap));
             let _ = window.set_size(PhysicalSize::new((rc.right - rc.left - 2 * gap) as u32, bar.height as u32));
+            // Auto-hide starts shown; the cursor loop hides it once the mouse is elsewhere.
+            (bar.concealed, bar.left_at) = (false, None);
             if !bar.fullscreen {
-                let _ = window.show();
+                // Without activating: taking the focus from the user's app made windows flicker.
+                win::show_inactive(hwnd);
             }
         } else {
             win::release_edge(hwnd);
@@ -155,7 +179,7 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
             .visible(false)
             .build()?;
         win::set_glass(HWND(window.hwnd()?.0), GLASS_TINT);
-        new.push(Bar { label, monitor, height, fullscreen: false });
+        new.push(Bar { label, monitor, height, fullscreen: false, concealed: false, left_at: None });
     }
     *bars(app) = new;
     Ok(())
@@ -188,38 +212,158 @@ fn check_fullscreen(app: &AppHandle) {
     if !SHOWN.load(SeqCst) {
         return;
     }
-    let changes: Vec<(String, bool)> = bars(app)
+    let changes: Vec<(String, bool, bool)> = bars(app)
         .iter_mut()
         .filter_map(|bar| {
             let fullscreen = win::fullscreen_on(bar.monitor);
             (fullscreen != bar.fullscreen).then(|| {
                 bar.fullscreen = fullscreen;
-                (bar.label.clone(), fullscreen)
+                (bar.label.clone(), fullscreen, bar.concealed)
             })
         })
         .collect();
-    for (label, fullscreen) in changes {
-        if let Some(window) = app.get_webview_window(&label) {
-            let _ = if fullscreen { window.hide() } else { window.show() };
+    for (label, fullscreen, concealed) in changes {
+        let Some(window) = app.get_webview_window(&label) else { continue };
+        if fullscreen {
+            let _ = window.hide();
+        } else if !concealed {
+            if let Ok(hwnd) = window.hwnd() {
+                win::show_inactive(HWND(hwnd.0));
+            }
         }
     }
 }
 
-/// Sends each bar the apps of its own monitor.
+/// What each bar was sent last, so unchanged lists aren't sent again (every event re-renders the bar).
+static LAST_APPS: Mutex<Option<HashMap<String, Vec<apps::AppItem>>>> = Mutex::new(None);
+
+/// Sends each bar the apps of its own monitor, when they changed. Window events come in bursts
+/// (focus, title, redraw); before, every one of them re-rendered every bar.
 fn push_apps(app: &AppHandle) {
     let targets: Vec<(String, RECT)> = bars(app).iter().map(|b| (b.label.clone(), b.monitor)).collect();
+    let mut last = LAST_APPS.lock().unwrap_or_else(|e| e.into_inner());
+    let last = last.get_or_insert_with(HashMap::new);
+    last.retain(|label, _| targets.iter().any(|(l, _)| l == label));
     for (label, monitor) in targets {
-        let _ = app.emit_to(label.as_str(), "apps", apps::list(monitor));
+        let now = apps::list(monitor);
+        if last.get(&label) != Some(&now) {
+            let _ = app.emit_to(label.as_str(), "apps", &now);
+            last.insert(label, now);
+        }
     }
 }
 
-/// CPU / GPU / RAM and network speed once a second, only while Pane is shown.
+/// CPU / GPU / RAM and network speed once a second, only while Pane is shown and the meters are on.
 fn usage_loop(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        if SHOWN.load(SeqCst) {
-            let _ = app.emit("usage", usage::sample());
+    std::thread::spawn(move || {
+        let mut last = None;
+        loop {
+            if SHOWN.load(SeqCst) && settings::get().show_usage {
+                let now = usage::sample();
+                if last.as_ref() != Some(&now) {
+                    let _ = app.emit("usage", &now);
+                    last = Some(now);
+                }
+            }
+            std::thread::sleep(Duration::from_secs(1));
         }
-        std::thread::sleep(Duration::from_secs(1));
+    });
+}
+
+/// Last Codex usage (None: not logged in to Codex with ChatGPT, or not fetched yet).
+static CODEX: Mutex<Option<codex::CodexUsage>> = Mutex::new(None);
+
+fn fetch_codex(app: &AppHandle) {
+    let now = codex::fetch();
+    if let Some(codex::CodexUsage::Error { note }) = &now {
+        win::log(&format!("codex limits unavailable: {note}"));
+    }
+    *CODEX.lock().unwrap_or_else(|e| e.into_inner()) = now.clone();
+    let _ = app.emit("codex", now);
+}
+
+/// Codex plan limits every 5 minutes, sent to the bars.
+fn codex_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        fetch_codex(&app);
+        std::thread::sleep(Duration::from_secs(5 * 60));
+    });
+}
+
+/// Auto-hide: shows a bar when the mouse touches the bottom edge of its monitor and hides it ~0.7 s after
+/// the mouse left it. Polls the cursor every 60 ms, only while auto-hide is on (a mouse hook would run on
+/// every mouse move in every app).
+fn autohide_loop(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        let on = SHOWN.load(SeqCst) && settings::get().autohide;
+        std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
+        let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
+        let hold = HOLD.load(SeqCst);
+        let mut changes = Vec::new();
+        for bar in bars(&app).iter_mut() {
+            let m = bar.monitor;
+            let inside = x >= m.left && x < m.right && y >= m.top && y < m.bottom;
+            let over = inside && y >= m.bottom - bar.height - 2 * gap_of(bar);
+            if bar.concealed {
+                if inside && y >= m.bottom - 2 && !bar.fullscreen {
+                    (bar.concealed, bar.left_at) = (false, None);
+                    changes.push((bar.label.clone(), true));
+                }
+            } else if over || hold || bar.fullscreen {
+                bar.left_at = None;
+            } else if bar.left_at.get_or_insert_with(Instant::now).elapsed() > Duration::from_millis(700) {
+                bar.concealed = true;
+                changes.push((bar.label.clone(), false));
+            }
+        }
+        for (label, show) in changes {
+            on_main(&app, move |h| {
+                let Some(window) = h.get_webview_window(&label) else { return };
+                if show {
+                    if let Ok(hwnd) = window.hwnd() {
+                        win::show_inactive(HWND(hwnd.0));
+                    }
+                    let _ = h.emit_to(label.as_str(), "shown", ()); // slide-in animation
+                } else {
+                    let _ = window.hide();
+                }
+            });
+        }
+    });
+}
+
+/// Adaptive colour: every 0.75 s, the colours of the apps just above each bar (8 bands, left to right),
+/// sent to that bar when they changed. Only while the setting is on and the bar is visible.
+fn tint_loop(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last: HashMap<String, Vec<[u8; 3]>> = HashMap::new();
+        let mut was_on = false;
+        loop {
+            std::thread::sleep(Duration::from_millis(750));
+            let on = SHOWN.load(SeqCst) && settings::get().adaptive_color;
+            if !on {
+                if was_on {
+                    let _ = app.emit("tint", None::<Vec<[u8; 3]>>);
+                    last.clear();
+                }
+                was_on = false;
+                continue;
+            }
+            was_on = true;
+            let targets: Vec<(String, i32)> =
+                bars(&app).iter().filter(|b| !b.concealed && !b.fullscreen).map(|b| (b.label.clone(), gap_of(b))).collect();
+            for (label, gap) in targets {
+                let rect = app.get_webview_window(&label).and_then(|w| w.hwnd().ok()).and_then(|h| win::window_rect(HWND(h.0)));
+                let Some(rc) = rect else { continue };
+                let Some(colors) = win::screen_colors(rc.left, rc.right, rc.top - gap, 8) else { continue };
+                // Rounded to steps of 8, so a blinking cursor or a video doesn't resend it every time.
+                let colors: Vec<[u8; 3]> = colors.into_iter().map(|c| c.map(|v| v & 0xF8)).collect();
+                if last.get(&label) != Some(&colors) {
+                    let _ = app.emit_to(label.as_str(), "tint", Some(&colors));
+                    last.insert(label, colors);
+                }
+            }
+        }
     });
 }
 
@@ -259,7 +403,14 @@ fn weather_loop(app: AppHandle) {
 
 /// Sends all tray icons to every bar and popup (bars show the promoted ones, popups the rest).
 fn push_tray(app: &AppHandle) {
-    let _ = app.emit("tray", tray::list());
+    static LAST: Mutex<Option<Vec<tray::TrayIcon>>> = Mutex::new(None);
+    let now = tray::list();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    // Apps re-send their icons often with nothing changed; each send rebuilt the tray in every bar.
+    if last.as_ref() != Some(&now) {
+        let _ = app.emit("tray", &now);
+        *last = Some(now);
+    }
 }
 
 /// Starts `Pane.exe --watchdog <pid>`: it waits until this process ends (also by crash or Task Manager)
@@ -401,6 +552,73 @@ fn open_claude_usage() {
 }
 
 #[tauri::command]
+fn get_codex() -> Option<codex::CodexUsage> {
+    CODEX.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn modified(path: Option<std::path::PathBuf>) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path?).and_then(|m| m.modified()).ok()
+}
+
+/// Opens a terminal with `codex login`; the widget appears once Codex wrote its login (checked for 5 minutes).
+#[tauri::command]
+fn open_codex_login(app: AppHandle) {
+    win::run_in_terminal("codex login");
+    std::thread::spawn(move || {
+        let before = modified(codex::auth_path());
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_secs(3));
+            let now = modified(codex::auth_path());
+            if now.is_some() && now != before {
+                std::thread::sleep(Duration::from_secs(1)); // let Codex finish writing
+                return fetch_codex(&app);
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn open_codex_usage() {
+    win::open("https://chatgpt.com/codex/settings/usage");
+}
+
+#[tauri::command]
+fn codex_logged_in() -> bool {
+    codex::logged_in()
+}
+
+/// Opens a terminal with Claude Code's login, for when its stored login can't be refreshed any more.
+#[tauri::command]
+fn open_claude_login() {
+    win::run_in_terminal("claude /login");
+}
+
+#[tauri::command]
+fn get_settings() -> settings::Settings {
+    settings::get()
+}
+
+#[tauri::command]
+fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settings> {
+    let now = settings::set(&key, on)?;
+    let _ = app.emit("settings", &now);
+    if key == "autohide" && SHOWN.load(SeqCst) {
+        on_main(&app, |h| place_bars(h, true));
+    }
+    if key == "show_codex" && on {
+        let h = app.clone();
+        std::thread::spawn(move || fetch_codex(&h));
+    }
+    Some(now)
+}
+
+/// Keeps an auto-hidden bar up while its right-click menu is open.
+#[tauri::command]
+fn hold_bar(on: bool) {
+    HOLD.store(on, SeqCst);
+}
+
+#[tauri::command]
 fn open_volume_mixer() {
     win::open("ms-settings:apps-volume");
 }
@@ -459,11 +677,13 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
     popup.set_size(PhysicalSize::new(w.round() as u32, h.round() as u32))?;
     popup.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))?;
     popup.show()?;
+    HOLD.store(true, SeqCst);
     popup.set_focus()
 }
 
 #[tauri::command]
 fn close_overflow(window: WebviewWindow) {
+    HOLD.store(false, SeqCst);
     // Destroyed, not hidden: a hidden popup keeps its ~30 MB page alive. Reopening builds it again (~0.1 s).
     let _ = window.destroy();
 }
@@ -556,7 +776,15 @@ fn main() {
             autostart,
             set_autostart,
             check_update,
-            install_update
+            install_update,
+            get_codex,
+            open_codex_login,
+            open_codex_usage,
+            codex_logged_in,
+            open_claude_login,
+            get_settings,
+            set_setting,
+            hold_bar
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -568,6 +796,9 @@ fn main() {
             weather_loop(handle.clone());
             usage_loop(handle.clone());
             claude_loop(handle.clone());
+            codex_loop(handle.clone());
+            autohide_loop(handle.clone());
+            tint_loop(handle.clone());
             update::watch(handle.clone());
             let m = handle.clone();
             media::watch(move || {

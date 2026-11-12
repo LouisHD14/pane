@@ -21,6 +21,12 @@ pub fn get(url: &str, headers: &[(&str, &str)]) -> Result<String, String> {
     response.body_mut().read_to_string().map_err(|e| reason(&e))
 }
 
+/// Blocking POST of a JSON body; Ok(response body) on 2xx. Same error rules as `get`.
+pub fn post_json(url: &str, body: &serde_json::Value) -> Result<String, String> {
+    let mut response = agent().post(url).header("Content-Type", "application/json").send(body.to_string()).map_err(|e| reason(&e))?;
+    response.body_mut().read_to_string().map_err(|e| reason(&e))
+}
+
 fn reason(e: &ureq::Error) -> String {
     match e {
         ureq::Error::StatusCode(code) => format!("HTTP {code}"),

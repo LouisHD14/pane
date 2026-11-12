@@ -16,9 +16,14 @@ use windows::Win32::UI::Shell::{
     SHAppBarMessage, ABE_BOTTOM, ABM_GETSTATE, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABM_SETSTATE,
     ABS_AUTOHIDE, APPBARDATA, ShellExecuteW,
 };
+use windows::Win32::Foundation::POINT;
+use windows::Win32::Graphics::Gdi::{
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, SRCCOPY,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
-    IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL,
+    FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindowVisible, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL,
+    WINDOW_EX_STYLE, WS_EX_TOOLWINDOW,
 };
 
 /// Pane's data folder, %LOCALAPPDATA%\org.gruening.pane (the same one the uninstaller offers to delete).
@@ -37,6 +42,23 @@ pub fn log(message: &str) {
     if let Ok(mut file) = file {
         let _ = writeln!(file, "{secs} {message}");
     }
+}
+
+/// Reads a JSON file, lets `change` edit it, and writes it back through a temp file + rename, so a crash
+/// or a reader in between never sees half a file. Keys `change` doesn't touch stay as they were.
+pub fn update_json(
+    path: &Path,
+    change: impl FnOnce(&mut serde_json::Value) -> Result<(), &'static str>,
+) -> Result<(), String> {
+    let text = fs::read_to_string(path).map_err(|_| "can't read the login file")?;
+    let mut root: serde_json::Value = serde_json::from_str(&text).map_err(|_| "login file isn't JSON")?;
+    change(&mut root)?;
+    let out = serde_json::to_string_pretty(&root).map_err(|_| "can't write the login file")?;
+    let tmp = path.with_extension("pane-tmp");
+    fs::write(&tmp, out).and_then(|_| fs::rename(&tmp, path)).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("can't save the login file: {}", e.kind())
+    })
 }
 
 /// Holds the taskbar's auto-hide setting from before Pane changed it. Exists only while Pane hides the taskbar.
@@ -238,9 +260,96 @@ pub fn fullscreen_on(monitor: RECT) -> bool {
         if matches!(String::from_utf16_lossy(&class[..len]).as_str(), "Progman" | "WorkerW") {
             return false;
         }
+        // Screen overlays (Snipping Tool's Win+Shift+S, screen recorders) cover the monitor too, but only for a
+        // moment: hiding the bar for them made it blink and left it out of the screenshot.
+        let ex = WINDOW_EX_STYLE(GetWindowLongPtrW(fg, GWL_EXSTYLE) as u32);
+        if is_overlay(ex, &crate::apps::exe_of(pid)) {
+            return false;
+        }
         let mut rect = RECT::default();
         GetWindowRect(fg, &mut rect).is_ok() && covers(rect, monitor)
     }
+}
+
+/// Tool windows never are fullscreen apps; the Snipping Tool's overlay is known by its process.
+fn is_overlay(ex: WINDOW_EX_STYLE, exe: &str) -> bool {
+    const OVERLAYS: [&str; 4] = ["screenclippinghost.exe", "snippingtool.exe", "screensketch.exe", "shellexperiencehost.exe"];
+    let name = exe.rsplit('\\').next().unwrap_or(exe);
+    ex.contains(WS_EX_TOOLWINDOW) || OVERLAYS.contains(&name)
+}
+
+/// Shows a window without activating it, so the app the user works in keeps the keyboard focus.
+pub fn show_inactive(hwnd: HWND) {
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWNA);
+    }
+}
+
+pub fn window_rect(hwnd: HWND) -> Option<RECT> {
+    let mut rc = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut rc) }.ok().map(|_| rc)
+}
+
+/// Opens a console window running `command` (e.g. "codex login"); it stays open so the user sees the result.
+pub fn run_in_terminal(command: &str) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x10;
+    let result = std::process::Command::new("cmd").args(["/k", command]).creation_flags(CREATE_NEW_CONSOLE).spawn();
+    if let Err(e) = result {
+        log(&format!("can't open a terminal: {e}"));
+    }
+}
+
+/// The cursor's screen position in physical pixels.
+pub fn cursor() -> Option<(i32, i32)> {
+    let mut p = POINT::default();
+    unsafe { GetCursorPos(&mut p) }.ok().map(|_| (p.x, p.y))
+}
+
+/// Colours of the screen row just above `y` from `left` to `right`, in `n` equal parts (each part's median,
+/// so the 1 px borders between windows don't tint it). Reads 3 rows; None when the screen can't be read
+/// (secure desktop, locked PC).
+pub fn screen_colors(left: i32, right: i32, y: i32, n: usize) -> Option<Vec<[u8; 3]>> {
+    let (w, h) = (right - left, 3);
+    if w < n as i32 || n == 0 {
+        return None;
+    }
+    unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let bmp = CreateCompatibleBitmap(screen, w, h);
+        let old = SelectObject(mem, bmp.into());
+        let copied = BitBlt(mem, 0, 0, w, h, Some(screen), left, y - h, SRCCOPY).is_ok();
+        SelectObject(mem, old);
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        let px = if copied { crate::apps::pixels(bmp) } else { None };
+        let _ = DeleteObject(bmp.into());
+        let (pw, ph, px) = px?;
+        Some(segment_medians(&px, pw as usize, ph as usize, n))
+    }
+}
+
+/// Splits BGRA pixels into `n` column bands and returns each band's per-channel median as RGB.
+fn segment_medians(px: &[u8], w: usize, h: usize, n: usize) -> Vec<[u8; 3]> {
+    (0..n)
+        .map(|i| {
+            let (x0, x1) = (i * w / n, ((i + 1) * w / n).max(i * w / n + 1));
+            let mut ch: [Vec<u8>; 3] = Default::default();
+            for y in 0..h {
+                for x in x0..x1.min(w) {
+                    let p = &px[(y * w + x) * 4..];
+                    ch[0].push(p[2]);
+                    ch[1].push(p[1]);
+                    ch[2].push(p[0]);
+                }
+            }
+            ch.map(|mut c| {
+                c.sort_unstable();
+                c.get(c.len() / 2).copied().unwrap_or(0)
+            })
+        })
+        .collect()
 }
 
 fn covers(r: RECT, m: RECT) -> bool {
@@ -276,6 +385,45 @@ mod tests {
         assert!(!covers(RECT { left: -2560, top: 0, right: 0, bottom: 1440 }, monitor));
         // Maximized window: overhangs 8 px but stops above Pane's 48 px edge.
         assert!(!covers(RECT { left: -8, top: -8, right: 2568, bottom: 1400 }, monitor));
+    }
+
+    #[test]
+    fn snipping_overlay_is_not_fullscreen_app() {
+        assert!(is_overlay(WINDOW_EX_STYLE(0), r"c:\windows\systemapps\x\screenclippinghost.exe"));
+        assert!(is_overlay(WINDOW_EX_STYLE(0), r"c:\program files\windowsapps\snip\snippingtool.exe"));
+        assert!(is_overlay(WS_EX_TOOLWINDOW, r"c:\tools\recorder.exe"));
+        assert!(!is_overlay(WINDOW_EX_STYLE(0), r"c:\games\game.exe"));
+    }
+
+    #[test]
+    fn colour_bands_ignore_thin_borders() {
+        // 10 px wide, 3 rows: left half red with a white 1 px border column at x=2, right half blue.
+        let mut px = Vec::new();
+        for _ in 0..3 {
+            for x in 0..10 {
+                let bgra = if x == 2 { [255, 255, 255, 255] } else if x < 5 { [0, 0, 200, 255] } else { [200, 0, 0, 255] };
+                px.extend_from_slice(&bgra);
+            }
+        }
+        assert_eq!(segment_medians(&px, 10, 3, 2), vec![[200, 0, 0], [0, 0, 200]]);
+    }
+
+    #[test]
+    fn json_update_keeps_other_keys() {
+        let dir = std::env::temp_dir().join(format!("pane-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("creds.json");
+        fs::write(&file, r#"{"other":{"keep":1},"login":{"token":"old","extra":true}}"#).unwrap();
+        update_json(&file, |v| {
+            v["login"]["token"] = "new".into();
+            Ok(())
+        })
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v["login"]["token"], "new");
+        assert_eq!(v["login"]["extra"], true);
+        assert_eq!(v["other"]["keep"], 1);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
