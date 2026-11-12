@@ -132,6 +132,7 @@ export async function settingsPage() {
         toggle("show_usage", "CPU / GPU / RAM"),
         toggle("show_weather", "Weather"),
       ),
+      group("Memory", toggle("low_memory", "Low memory mode (no GPU, applies after restart)")),
       group("Windows", el("label", { className: "row" }, el("span", {}, "Start with Windows"), autostart)),
       group("Updates", el("div", { className: "row" }, status, check)),
     ),
