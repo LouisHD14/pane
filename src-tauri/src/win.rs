@@ -347,11 +347,6 @@ pub fn hide(hwnd: HWND) {
     }
 }
 
-pub fn window_rect(hwnd: HWND) -> Option<RECT> {
-    let mut rc = RECT::default();
-    unsafe { GetWindowRect(hwnd, &mut rc) }.ok().map(|_| rc)
-}
-
 /// Opens a console window running `command` (e.g. "codex login"); it stays open so the user sees the result.
 pub fn run_in_terminal(command: &str) {
     use std::os::windows::process::CommandExt;
@@ -368,12 +363,10 @@ pub fn cursor() -> Option<(i32, i32)> {
     unsafe { GetCursorPos(&mut p) }.ok().map(|_| (p.x, p.y))
 }
 
-/// Colours of the screen row just above `y` from `left` to `right`, in `n` equal parts (each part's median,
-/// so the 1 px borders between windows don't tint it). Reads 3 rows; None when the screen can't be read
-/// (secure desktop, locked PC).
-pub fn screen_colors(left: i32, right: i32, y: i32, n: usize) -> Option<Vec<[u8; 3]>> {
-    let (w, h) = (right - left, 3);
-    if w < n as i32 || n == 0 {
+/// The screen's pixels in the rectangle (x, y, w, h) as BGRA rows (width, height, pixels); None when the
+/// screen can't be read (secure desktop, locked PC).
+pub fn screen_pixels(x: i32, y: i32, w: i32, h: i32) -> Option<(usize, usize, Vec<u8>)> {
+    if w <= 0 || h <= 0 {
         return None;
     }
     unsafe {
@@ -381,37 +374,14 @@ pub fn screen_colors(left: i32, right: i32, y: i32, n: usize) -> Option<Vec<[u8;
         let mem = CreateCompatibleDC(Some(screen));
         let bmp = CreateCompatibleBitmap(screen, w, h);
         let old = SelectObject(mem, bmp.into());
-        let copied = BitBlt(mem, 0, 0, w, h, Some(screen), left, y - h, SRCCOPY).is_ok();
+        let copied = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok();
         SelectObject(mem, old);
         let _ = DeleteDC(mem);
         ReleaseDC(None, screen);
         let px = if copied { crate::apps::pixels(bmp) } else { None };
         let _ = DeleteObject(bmp.into());
-        let (pw, ph, px) = px?;
-        Some(segment_medians(&px, pw as usize, ph as usize, n))
+        px.map(|(pw, ph, px)| (pw as usize, ph as usize, px))
     }
-}
-
-/// Splits BGRA pixels into `n` column bands and returns each band's per-channel median as RGB.
-fn segment_medians(px: &[u8], w: usize, h: usize, n: usize) -> Vec<[u8; 3]> {
-    (0..n)
-        .map(|i| {
-            let (x0, x1) = (i * w / n, ((i + 1) * w / n).max(i * w / n + 1));
-            let mut ch: [Vec<u8>; 3] = Default::default();
-            for y in 0..h {
-                for x in x0..x1.min(w) {
-                    let p = &px[(y * w + x) * 4..];
-                    ch[0].push(p[2]);
-                    ch[1].push(p[1]);
-                    ch[2].push(p[0]);
-                }
-            }
-            ch.map(|mut c| {
-                c.sort_unstable();
-                c.get(c.len() / 2).copied().unwrap_or(0)
-            })
-        })
-        .collect()
 }
 
 fn covers(r: RECT, m: RECT) -> bool {
@@ -470,19 +440,6 @@ mod tests {
         assert!(is_overlay(WINDOW_EX_STYLE(0), r"c:\program files\windowsapps\snip\snippingtool.exe"));
         assert!(is_overlay(WS_EX_TOOLWINDOW, r"c:\tools\recorder.exe"));
         assert!(!is_overlay(WINDOW_EX_STYLE(0), r"c:\games\game.exe"));
-    }
-
-    #[test]
-    fn colour_bands_ignore_thin_borders() {
-        // 10 px wide, 3 rows: left half red with a white 1 px border column at x=2, right half blue.
-        let mut px = Vec::new();
-        for _ in 0..3 {
-            for x in 0..10 {
-                let bgra = if x == 2 { [255, 255, 255, 255] } else if x < 5 { [0, 0, 200, 255] } else { [200, 0, 0, 255] };
-                px.extend_from_slice(&bgra);
-            }
-        }
-        assert_eq!(segment_medians(&px, 10, 3, 2), vec![[200, 0, 0], [0, 0, 200]]);
     }
 
     #[test]

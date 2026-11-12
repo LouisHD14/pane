@@ -4,6 +4,7 @@
 mod apps;
 mod claude;
 mod codex;
+mod colors;
 mod http;
 mod media;
 mod preview;
@@ -362,11 +363,11 @@ fn autohide_loop(app: AppHandle) {
     });
 }
 
-/// Adaptive colour: every 0.75 s, the colours of the apps just above each bar (8 bands, left to right),
-/// sent to that bar when they changed. Only while the setting is on and the bar is visible.
+/// Adaptive colour and the app-colour floor: every 0.75 s, the colours of the app sitting on each bar
+/// (colors.rs), sent to that bar once they held still. Only while one of the settings is on and the bar is visible.
 fn tint_loop(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut last: HashMap<String, Vec<[u8; 3]>> = HashMap::new();
+        let mut steady: HashMap<String, colors::Steady> = HashMap::new();
         let mut was_on = false;
         loop {
             std::thread::sleep(Duration::from_millis(750));
@@ -375,25 +376,22 @@ fn tint_loop(app: AppHandle) {
             if !on {
                 if was_on {
                     let _ = app.emit("tint", None::<Vec<[u8; 3]>>);
-                    last.clear();
+                    steady.clear();
                 }
                 was_on = false;
                 continue;
             }
             was_on = true;
             let fill = settings::get().fill;
-            // Just above the reserved strip, so the bar itself isn't read.
-            let targets: Vec<(String, RECT)> =
-                bars(&app).iter().filter(|b| !b.concealed && !b.fullscreen).map(|b| (b.label.clone(), b.layout(fill).0)).collect();
-            for (label, strip) in targets {
-                let rect = app.get_webview_window(&label).and_then(|w| w.hwnd().ok()).and_then(|h| win::window_rect(HWND(h.0)));
-                let Some(rc) = rect else { continue };
-                let Some(colors) = win::screen_colors(rc.left, rc.right, strip.top, 8) else { continue };
-                // Rounded to steps of 8, so a blinking cursor or a video doesn't resend it every time.
-                let colors: Vec<[u8; 3]> = colors.into_iter().map(|c| c.map(|v| v & 0xF8)).collect();
-                if last.get(&label) != Some(&colors) {
-                    let _ = app.emit_to(label.as_str(), "tint", Some(&colors));
-                    last.insert(label, colors);
+            let targets: Vec<(String, RECT, RECT)> = bars(&app)
+                .iter()
+                .filter(|b| !b.concealed && !b.fullscreen)
+                .map(|b| (b.label.clone(), b.layout(fill).0, b.monitor))
+                .collect();
+            for (label, strip, monitor) in targets {
+                let now = colors::app_floor(monitor, strip, 8);
+                if let Some(show) = steady.entry(label.clone()).or_default().feed(now) {
+                    let _ = app.emit_to(label.as_str(), "tint", show);
                 }
             }
         }
