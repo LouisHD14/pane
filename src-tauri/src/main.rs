@@ -27,8 +27,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ES
 
 /// Bar height in logical pixels, the same as the Windows 11 taskbar.
 const BAR_HEIGHT: f64 = 48.0;
-/// The bar floats this far (logical px) from the screen edges and from maximized windows above it.
+/// The floating bar keeps this far (logical px) from the screen edges...
 const GAP: f64 = 6.0;
+/// ...and this far from maximized windows above it.
+const TOP_GAP: f64 = 2.0;
 /// WebView2 start options for every Pane window (all windows must use the same ones). Tauri's own
 /// defaults plus: one renderer process for all bars and the popup instead of one each (~30 MB each).
 const BROWSER_ARGS: &str =
@@ -58,8 +60,18 @@ struct Bars(Mutex<Vec<Bar>>);
 /// Auto-hide: keeps the bar up while its menu or the hidden-icons popup is open.
 static HOLD: AtomicBool = AtomicBool::new(false);
 
-fn gap_of(bar: &Bar) -> i32 {
-    (bar.height as f64 * GAP / BAR_HEIGHT).round() as i32
+impl Bar {
+    /// (strip reserved at the bottom of the monitor, the bar window's rect) in physical px.
+    fn layout(&self, fill: bool) -> (RECT, RECT) {
+        let px = |logical: f64| (self.height as f64 * logical / BAR_HEIGHT).round() as i32;
+        layout(self.monitor, self.height, if fill { 0 } else { px(GAP) }, if fill { 0 } else { px(TOP_GAP) })
+    }
+}
+
+/// The bar `gap` px from the bottom and the sides; the reserved strip ends `top_gap` px above it.
+fn layout(m: RECT, height: i32, gap: i32, top_gap: i32) -> (RECT, RECT) {
+    let bar = RECT { left: m.left + gap, top: m.bottom - gap - height, right: m.right - gap, bottom: m.bottom - gap };
+    (RECT { top: bar.top - top_gap, ..m }, bar)
 }
 
 fn bars(app: &AppHandle) -> MutexGuard<'_, Vec<Bar>> {
@@ -118,23 +130,22 @@ fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
 
 /// Main thread only.
 fn place_bars(app: &AppHandle, show: bool) {
-    let autohide = settings::get().autohide;
+    let settings = settings::get();
     for bar in bars(app).iter_mut() {
         let Some(window) = app.get_webview_window(&bar.label) else { continue };
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            let gap = gap_of(bar);
-            let rc = if autohide {
+            let (strip, rc) = bar.layout(settings.fill);
+            if settings.autohide {
                 // Floats over the apps: nothing is reserved, the bar takes the same place as otherwise.
                 win::release_edge(hwnd);
-                RECT { top: bar.monitor.bottom - bar.height - 2 * gap, ..bar.monitor }
             } else {
-                // Reserve bar + a gap above and below, then float the bar inside with the gap on all sides.
-                win::reserve_edge(hwnd, bar.monitor, bar.height + 2 * gap)
-            };
-            let _ = window.set_position(PhysicalPosition::new(rc.left + gap, rc.top + gap));
-            let _ = window.set_size(PhysicalSize::new((rc.right - rc.left - 2 * gap) as u32, bar.height as u32));
+                win::reserve_edge(hwnd, strip);
+            }
+            win::set_round(hwnd, !settings.fill);
+            let _ = window.set_position(PhysicalPosition::new(rc.left, rc.top));
+            let _ = window.set_size(PhysicalSize::new((rc.right - rc.left) as u32, (rc.bottom - rc.top) as u32));
             // Auto-hide starts shown; the cursor loop hides it once the mouse is elsewhere.
             (bar.concealed, bar.left_at) = (false, None);
             if !bar.fullscreen {
@@ -301,11 +312,12 @@ fn autohide_loop(app: AppHandle) {
         std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
         let hold = HOLD.load(SeqCst);
+        let fill = settings::get().fill;
         let mut changes = Vec::new();
         for bar in bars(&app).iter_mut() {
             let m = bar.monitor;
             let inside = x >= m.left && x < m.right && y >= m.top && y < m.bottom;
-            let over = inside && y >= m.bottom - bar.height - 2 * gap_of(bar);
+            let over = inside && y >= bar.layout(fill).0.top;
             if bar.concealed {
                 if inside && y >= m.bottom - 2 && !bar.fullscreen {
                     (bar.concealed, bar.left_at) = (false, None);
@@ -354,12 +366,14 @@ fn tint_loop(app: AppHandle) {
                 continue;
             }
             was_on = true;
-            let targets: Vec<(String, i32)> =
-                bars(&app).iter().filter(|b| !b.concealed && !b.fullscreen).map(|b| (b.label.clone(), gap_of(b))).collect();
-            for (label, gap) in targets {
+            let fill = settings::get().fill;
+            // Just above the reserved strip, so the bar itself isn't read.
+            let targets: Vec<(String, RECT)> =
+                bars(&app).iter().filter(|b| !b.concealed && !b.fullscreen).map(|b| (b.label.clone(), b.layout(fill).0)).collect();
+            for (label, strip) in targets {
                 let rect = app.get_webview_window(&label).and_then(|w| w.hwnd().ok()).and_then(|h| win::window_rect(HWND(h.0)));
                 let Some(rc) = rect else { continue };
-                let Some(colors) = win::screen_colors(rc.left, rc.right, rc.top - gap, 8) else { continue };
+                let Some(colors) = win::screen_colors(rc.left, rc.right, strip.top, 8) else { continue };
                 // Rounded to steps of 8, so a blinking cursor or a video doesn't resend it every time.
                 let colors: Vec<[u8; 3]> = colors.into_iter().map(|c| c.map(|v| v & 0xF8)).collect();
                 if last.get(&label) != Some(&colors) {
@@ -606,7 +620,7 @@ fn get_settings() -> settings::Settings {
 fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settings> {
     let now = settings::set(&key, on)?;
     let _ = app.emit("settings", &now);
-    if key == "autohide" && SHOWN.load(SeqCst) {
+    if (key == "autohide" || key == "fill") && SHOWN.load(SeqCst) {
         on_main(&app, |h| place_bars(h, true));
     }
     if key == "show_codex" && on {
@@ -822,4 +836,22 @@ fn main() {
                 set_shown(app, false);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserved_strip_matches_the_drawn_bar() {
+        let m = RECT { left: 0, top: 0, right: 2560, bottom: 1440 };
+        // Floating: 6 px from the edges, the reserved strip ends 2 px above the bar.
+        let (strip, bar) = layout(m, 48, 6, 2);
+        assert_eq!((bar.left, bar.top, bar.right, bar.bottom), (6, 1386, 2554, 1434));
+        assert_eq!((strip.left, strip.top, strip.right, strip.bottom), (0, 1384, 2560, 1440));
+        // Fill: the bar is exactly the reserved strip.
+        let (strip, bar) = layout(m, 48, 0, 0);
+        assert_eq!((bar.left, bar.top, bar.right, bar.bottom), (0, 1392, 2560, 1440));
+        assert_eq!((strip.top, strip.bottom), (bar.top, bar.bottom));
+    }
 }

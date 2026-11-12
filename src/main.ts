@@ -21,6 +21,7 @@ type AppItem = { id: string; name: string; icon: string; pinned: boolean; window
 type Item = MenuItemOptions | CheckMenuItemOptions | PredefinedMenuItemOptions | SubmenuOptions;
 type Settings = {
   autohide: boolean;
+  fill: boolean;
   adaptive_color: boolean;
   show_media: boolean;
   show_claude: boolean;
@@ -35,6 +36,7 @@ let settings: Settings | null = null;
 function applySettings(s: Settings) {
   settings = s;
   for (const w of WIDGETS) document.body.classList.toggle(`no-${w}`, !s[`show_${w}`]);
+  document.body.classList.toggle("fill", s.fill);
   if (!s.adaptive_color) applyTint(null);
 }
 
@@ -273,6 +275,7 @@ async function paneMenu(): Promise<Item[]> {
       text: "Settings",
       items: [
         flip("autohide", "Auto-hide the bar"),
+        flip("fill", "Fill the screen edge"),
         flip("adaptive_color", "Match the colour of apps"),
         { item: "Separator" },
         flip("show_media", "Show Now Playing"),

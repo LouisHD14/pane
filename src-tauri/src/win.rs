@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use std::mem::size_of_val;
 use windows::core::{s, w, HSTRING, PCWSTR};
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE};
@@ -18,7 +18,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, SRCCOPY,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetMonitorInfoW, MonitorFromRect,
+    ReleaseDC, SelectObject, MONITORINFO, MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
@@ -163,20 +164,34 @@ pub fn restore_taskbar(dir: &Path) {
     }
 }
 
-/// Reserves `height` px at the bottom of `monitor` for `hwnd`, so maximized windows stop above it.
-/// Returns the rect the bar should take.
+/// Reserves `strip` (the bottom of a monitor) for `hwnd`, so maximized windows stop above it.
+/// The strip is always taken as given: the shell's answer used to move the bar up when another bottom
+/// AppBar (Explorer's hidden taskbar) still held space, e.g. after auto-hide was turned off again.
 // shortcut: no AppBar notifications (uCallbackMessage = 0), so fullscreen apps aren't noticed yet; Phase 2.
-pub fn reserve_edge(hwnd: HWND, monitor: RECT, height: i32) -> RECT {
+pub fn reserve_edge(hwnd: HWND, strip: RECT) {
     let mut data = appbar(hwnd);
     data.uEdge = ABE_BOTTOM;
-    data.rc = monitor;
+    data.rc = strip;
     unsafe {
         SHAppBarMessage(ABM_NEW, &mut data); // false if already registered, which is fine
         SHAppBarMessage(ABM_QUERYPOS, &mut data);
-        data.rc.top = data.rc.bottom - height;
+        if data.rc.bottom != strip.bottom {
+            log(&format!("another bottom AppBar holds {} px; reserving the bottom edge anyway", strip.bottom - data.rc.bottom));
+        }
+        data.rc = strip;
         SHAppBarMessage(ABM_SETPOS, &mut data);
     }
-    data.rc
+    if let Some(work) = work_area(strip) {
+        if work.bottom != strip.top {
+            log(&format!("work area ends {} px above the bar's strip", strip.top - work.bottom));
+        }
+    }
+}
+
+/// The work area (screen minus reserved edges) of the monitor that holds `rc`.
+fn work_area(rc: RECT) -> Option<RECT> {
+    let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+    unsafe { GetMonitorInfoW(MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST), &mut info) }.as_bool().then_some(info.rcWork)
 }
 
 pub fn release_edge(hwnd: HWND) {
@@ -216,9 +231,15 @@ pub fn set_glass(hwnd: HWND, tint: u32) {
             size: size_of::<AccentPolicy>(),
         };
         set(hwnd, &mut attribute);
-        // Windows 11 rounded corners also for borderless windows; they clip the glass too.
-        let round = DWMWCP_ROUND;
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &round as *const _ as _, size_of_val(&round) as u32);
+    }
+    set_round(hwnd, true);
+}
+
+/// Windows 11 rounded corners also for borderless windows (they clip the glass too), or square ones.
+pub fn set_round(hwnd: HWND, round: bool) {
+    let corners = if round { DWMWCP_ROUND } else { DWMWCP_DONOTROUND };
+    unsafe {
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corners as *const _ as _, size_of_val(&corners) as u32);
     }
 }
 
