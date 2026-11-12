@@ -17,7 +17,9 @@ use windows::Win32::UI::Shell::{
     ABS_AUTOHIDE, APPBARDATA, DefSubclassProc, SetWindowSubclass, ShellExecuteW,
 };
 use windows::Win32::Foundation::{LRESULT, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{SWP_NOMOVE, SWP_NOSIZE, WINDOWPOS, WM_WINDOWPOSCHANGING};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOWPOS, WM_WINDOWPOSCHANGING,
+};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, SRCCOPY,
@@ -187,6 +189,13 @@ pub fn reserve_edge(hwnd: HWND, strip: RECT) {
 /// shell while the taskbar's auto-hide changes) moved the bar 50 px up for a moment, which is what
 /// left the bar too high after auto-hide on â†’ off. `pin` makes the window refuse every other place.
 static PINNED: std::sync::Mutex<Vec<(isize, RECT)>> = std::sync::Mutex::new(Vec::new());
+
+/// Moves a window's top-left corner without resizing, activating or changing its z-order.
+pub fn move_to(hwnd: HWND, x: i32, y: i32) {
+    unsafe {
+        let _ = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
 
 /// Pins `hwnd` to `rc` (physical px), or unpins it with `None`. Main thread (the window's thread).
 pub fn pin(hwnd: HWND, rc: Option<RECT>) {
