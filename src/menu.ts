@@ -10,6 +10,7 @@ export type Settings = {
   fill: boolean;
   adaptive_color: boolean;
   blend: boolean;
+  all_monitors: boolean;
   show_media: boolean;
   show_claude: boolean;
   show_codex: boolean;
@@ -77,6 +78,7 @@ export async function menuPage() {
       flip("fill", "Fill the screen edge"),
       flip("adaptive_color", "Match the colour of apps"),
       flip("blend", "App colour under the bar"),
+      flip("all_monitors", "Show apps from all monitors"),
       "-",
       flip("show_media", "Show Now Playing"),
       flip("show_claude", "Show Claude usage"),

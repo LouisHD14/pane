@@ -92,9 +92,9 @@ impl Win {
 const ICON_PX: i32 = 48;
 
 /// Pinned apps first (in the user's Windows taskbar pin order), then running unpinned apps in order of first appearance.
-/// Only windows on the monitor whose rcMonitor equals `monitor` are listed in `windows`; pinned apps appear on every
-/// monitor, running unpinned apps only on monitors where they have windows.
-pub fn list(monitor: RECT) -> Vec<AppItem> {
+/// Only windows on the monitor whose rcMonitor equals `monitor` are listed in `windows` (None: windows of every
+/// monitor); pinned apps appear on every monitor, running unpinned apps only on monitors where they have windows.
+pub fn list(monitor: Option<RECT>) -> Vec<AppItem> {
     com();
     let pins = pins();
     group(&pins, &windows(monitor), info)
@@ -463,7 +463,7 @@ pub(crate) fn taskbar_hwnds() -> Vec<HWND> {
     all
 }
 
-fn windows(monitor: RECT) -> Vec<Win> {
+fn windows(monitor: Option<RECT>) -> Vec<Win> {
     let fg = foreground();
     let badges = lock(&BADGES).clone().unwrap_or_default();
     let flashing = lock(&FLASHING).clone();
@@ -480,7 +480,7 @@ fn windows(monitor: RECT) -> Vec<Win> {
                 active: hwnd == fg,
                 badge: badges.get(&hwnd).cloned().unwrap_or_default(),
                 flashing: flashing.contains(&hwnd) && hwnd != fg,
-                here: monitor_of(h) == monitor,
+                here: monitor.is_none_or(|m| monitor_of(h) == m),
             }
         })
         .collect();
@@ -854,7 +854,7 @@ mod tests {
     #[ignore]
     fn print_apps() {
         let primary = monitor_of(unsafe { GetDesktopWindow() });
-        for a in list(primary) {
+        for a in list(Some(primary)) {
             let wins: Vec<_> = a.windows.iter().map(|w| format!("{:?}{}", w.title, if w.active { "*" } else { "" })).collect();
             println!("{} {:?} [{}] icon={}B {:?}", if a.pinned { "PIN" } else { "RUN" }, a.name, a.id, a.icon.len(), wins);
         }
