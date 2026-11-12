@@ -10,8 +10,19 @@ import { once, replay } from "./anim";
 import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
 import { applyTint } from "./tint";
 import { menuPage, type Settings } from "./menu";
+import { reorderPins } from "./reorder";
+import { settingsPage } from "./settings";
 
-type WinItem = { hwnd: number; title: string; active: boolean; badge: string; badge_tip: string; flashing: boolean };
+type Progress = { state: "normal" | "paused" | "error" | "indeterminate"; value: number };
+type WinItem = {
+  hwnd: number;
+  title: string;
+  active: boolean;
+  badge: string;
+  badge_tip: string;
+  flashing: boolean;
+  progress: Progress | null;
+};
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
 type Item = MenuItemOptions | PredefinedMenuItemOptions;
 
@@ -26,16 +37,43 @@ function applySettings(s: Settings) {
   if (!s.adaptive_color && !s.blend) applyTint(null);
 }
 
+/** Bar contents scale with the bar height (settings.rs `Size::height`; 48 px is what the CSS sizes are for). */
+const ZOOM = { small: 40 / 48, normal: 1, large: 56 / 48 };
+
+/** Glass lightness (50 = the original look; Rust changes the acrylic tint) and bar size, on every page. */
+function applyLook(s: Settings) {
+  const root = document.documentElement.style;
+  // Lighter: a white sheen over the glass. Darker: only the app-colour floor's slab needs a shade (no acrylic under it).
+  root.setProperty("--wash", String((Math.max(0, s.glass - 50) / 50) * 0.2));
+  root.setProperty("--shade", String((Math.max(0, 50 - s.glass) / 50) * 0.4));
+  root.setProperty("--bar-zoom", String(ZOOM[s.size] ?? 1));
+}
+
 const me = getCurrentWebviewWindow();
 const $ = (id: string) => document.getElementById(id)!;
 
-// The popups ("hidden icons", Pane menu, window preview) load the same page; the window label tells them apart from a bar.
+invoke<Settings>("get_settings").then(applyLook);
+me.listen<Settings>("settings", (e) => applyLook(e.payload));
+
+// The popups ("hidden icons", Pane menu, window preview) and the settings window load the same page; the window
+// label tells them apart from a bar.
 if (me.label.startsWith("overflow-")) overflowPage();
 else if (me.label.startsWith("menu-")) menuPage();
 else if (me.label.startsWith("preview-")) previewPage();
+else if (me.label === "settings") settingsPage();
 else barPage();
 
-type Card = { hwnd: number; title: string; active: boolean; rect: number[]; body: number[]; live: boolean };
+type ThumbButton = { id: number; icon: string; tip: string; enabled: boolean; inert: boolean; flat: boolean; dismiss: boolean };
+type Card = {
+  hwnd: number;
+  title: string;
+  active: boolean;
+  rect: number[];
+  body: number[];
+  live: boolean;
+  buttons: ThumbButton[];
+  bar: number[];
+};
 type Preview = { icon: string; cards: Card[] };
 
 /** Window previews above an app icon. Rust lays out the cards and DWM draws the live images into each `body`. */
@@ -43,13 +81,42 @@ function previewPage() {
   document.body.classList.add("preview");
   const px = (el: HTMLElement, [x, y, w, h]: number[]) =>
     Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+  const closeWindow = (c: Card) => invoke("close_window", { hwnd: c.hwnd });
+  // The app's own buttons (play/pause/next...), like under Windows' previews; a click reaches the app as WM_COMMAND.
+  const toolbar = (c: Card) => {
+    const bar = Object.assign(document.createElement("div"), { className: "card-buttons" });
+    bar.setAttribute("role", "toolbar");
+    bar.setAttribute("aria-label", `${c.title} controls`);
+    px(bar, c.bar);
+    bar.append(
+      ...c.buttons.map((t) => {
+        const b = Object.assign(document.createElement("button"), { className: "thumb-button", title: t.tip, disabled: !t.enabled });
+        b.setAttribute("aria-label", t.tip || `Button ${t.id}`);
+        b.classList.toggle("flat", t.flat);
+        if (t.icon) b.append(Object.assign(document.createElement("img"), { src: t.icon, alt: "" }));
+        if (t.inert) {
+          b.classList.add("inert");
+          b.tabIndex = -1;
+        } else {
+          b.onclick = () => {
+            invoke("thumb_button", { hwnd: c.hwnd, id: t.id });
+            if (t.dismiss) invoke("hide_preview");
+          };
+        }
+        return b;
+      }),
+    );
+    return bar;
+  };
   const show = (p: Preview | null) => {
     if (!p) return;
     document.body.replaceChildren(
       ...p.cards.map((c) => {
-        const card = Object.assign(document.createElement("button"), { className: "card", title: c.title });
+        const card = Object.assign(document.createElement("div"), { className: "card" });
         card.classList.toggle("active", c.active);
-        card.setAttribute("aria-label", `Switch to ${c.title}`);
+        px(card, c.rect);
+        const main = Object.assign(document.createElement("button"), { className: "card-main", title: c.title });
+        main.setAttribute("aria-label", `Switch to ${c.title}`);
         const title = Object.assign(document.createElement("span"), { className: "card-title", textContent: c.title });
         // Height of the title row = where the image starts.
         Object.assign(title.style, { height: `${c.body[1]}px`, lineHeight: `${c.body[1]}px` });
@@ -57,9 +124,16 @@ function previewPage() {
         body.className = c.live ? "card-body" : "card-body minimized";
         px(body, c.body);
         if (!c.live && p.icon) body.append(Object.assign(document.createElement("img"), { src: p.icon, alt: "" }));
-        card.append(title, body);
-        px(card, c.rect);
-        card.onclick = () => invoke("focus_window", { hwnd: c.hwnd });
+        main.append(title, body);
+        main.onclick = () => invoke("focus_window", { hwnd: c.hwnd });
+        const close = Object.assign(document.createElement("button"), { className: "card-close", textContent: "✕", title: "Close window" });
+        close.setAttribute("aria-label", `Close ${c.title}`);
+        close.onclick = () => closeWindow(c);
+        card.append(main, close);
+        if (c.buttons.length) card.append(toolbar(c));
+        // Middle-click closes the window, like on Windows' previews (and never starts autoscroll).
+        card.addEventListener("mousedown", (e) => e.button === 1 && e.preventDefault());
+        card.addEventListener("auxclick", (e) => e.button === 1 && closeWindow(c));
         return card;
       }),
     );
@@ -111,7 +185,9 @@ function barPage() {
 
   // --- Apps: pinned + running, each bar shows the windows on its own monitor.
   let apps: AppItem[] = [];
+  let pending: AppItem[] | null = null; // came in during a drag, shown when it ends
   const renderApps = (list: AppItem[]) => {
+    if (reorder.dragging()) return void (pending = list);
     const box = $("apps");
     const firstPaint = !box.children.length;
     apps = list;
@@ -135,6 +211,16 @@ function barPage() {
     // Touch the DOM only if the order changed: re-inserting restarts running animations.
     if (next.length !== box.children.length || next.some((b, i) => box.children[i] !== b)) box.replaceChildren(...next);
   };
+  // Pinned apps are dragged into Pane's own order (Rust saves it and sends it to every bar).
+  const reorder = reorderPins($("apps"), {
+    start: () => closePreview(),
+    end: () => {
+      const list = pending;
+      pending = null;
+      if (list) renderApps(list);
+    },
+    save: (order) => invoke("set_pin_order", { order }),
+  });
   invoke<AppItem[]>("get_apps").then(renderApps);
   me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
 
@@ -146,7 +232,7 @@ function barPage() {
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(() => {
       const app = apps.find((a) => a.id === b.dataset.id);
-      if (!app?.windows.length || !b.matches(":hover")) return;
+      if (!app?.windows.length || !b.matches(":hover") || reorder.dragging()) return;
       const r = b.getBoundingClientRect();
       previewOpen = true;
       invoke("show_preview", { id: app.id, left: r.left, right: r.right });
@@ -225,8 +311,9 @@ function barPage() {
   // --- Right-click: app menu on an app icon, Pane menu (own popup, menu.ts) everywhere else (tray icons handle their own).
   document.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
+    if (reorder.dragging()) return;
     closePreview();
-    const id = (e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
+    const id =(e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);
     if (!app) return invoke("open_menu", { clientX: e.clientX });
     const menu = await Menu.new({ items: appMenu(app) });
@@ -243,12 +330,17 @@ function barPage() {
 /** Fills a (new or reused) app button with the app's current state. */
 function updateAppButton(b: HTMLElement, app: AppItem) {
   b.classList.add("app");
+  b.classList.toggle("pinned", app.pinned);
+  if (app.pinned) b.setAttribute("aria-keyshortcuts", "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"); // move it (reorder.ts)
+  else b.removeAttribute("aria-keyshortcuts");
   b.dataset.id = app.id;
   // The app's badge (unread count / dot) from its first window that has one, like the Windows taskbar.
   const badged = app.windows.find((w) => w.badge);
   const tip = badged?.badge_tip ? ` (${badged.badge_tip})` : "";
+  // Progress (a download, a copy) from its first window that has one, like the Windows taskbar.
+  const progress = app.windows.find((w) => w.progress)?.progress;
   b.title = (app.windows.length === 1 ? app.windows[0].title : app.name) + tip;
-  b.setAttribute("aria-label", app.name + tip);
+  b.setAttribute("aria-label", app.name + tip + (progress ? `, ${progressText(progress)}` : ""));
   b.classList.toggle("running", app.windows.length > 0);
   b.classList.toggle("active", app.windows.some((w) => w.active));
   // Asks for attention (FlashWindowEx) until the window is brought to front.
@@ -270,7 +362,20 @@ function updateAppButton(b: HTMLElement, app: AppItem) {
   }
   if (badged && badge!.src !== badged.badge) badge!.src = badged.badge;
   if (!badged) badge?.remove();
+  // A thin bar under the icon in place of the running line; CSS colours it by state (data-state).
+  let bar = b.querySelector<HTMLElement>(".progress");
+  if (progress) {
+    bar ??= b.appendChild(Object.assign(document.createElement("span"), { className: "progress" }));
+    bar.dataset.state = progress.state;
+    bar.style.setProperty("--p", String(progress.value));
+  } else bar?.remove();
+  b.classList.toggle("progressing", !!progress);
   b.onclick = () => clickApp(app, b);
+}
+
+function progressText(p: Progress): string {
+  const pct = `${Math.round(p.value * 100)} %`;
+  return { normal: pct, paused: `paused at ${pct}`, error: `error at ${pct}`, indeterminate: "busy" }[p.state];
 }
 
 /** No window: start it (icon bounces). One window: front / minimize. Several: cycle through them. */
