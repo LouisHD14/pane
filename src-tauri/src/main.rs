@@ -208,6 +208,8 @@ fn rebuild_bars(app: &AppHandle) {
         }
         for kind in ["overflow", "menu"] {
             if let Some(popup) = app.get_webview_window(&format!("{kind}-{label}")) {
+                // Its page can't call close_popup any more, so let the bar auto-hide again here.
+                HOLD.store(false, SeqCst);
                 let _ = popup.destroy();
             }
         }
@@ -719,15 +721,19 @@ async fn open_menu(app: AppHandle, window: WebviewWindow, client_x: f64) -> taur
     }
     *MENU_X.lock().unwrap_or_else(|e| e.into_inner()) = client_x;
     HOLD.store(true, SeqCst);
-    popup(&app, &label).map(|_| ())
+    popup(&app, &label).map(|_| ()).inspect_err(|_| HOLD.store(false, SeqCst))
 }
 
 /// The menu page measured itself (CSS px): put it above its bar at the right-click, inside the monitor.
 #[tauri::command]
 async fn fit_menu(app: AppHandle, window: WebviewWindow, width: f64, height: f64) -> tauri::Result<()> {
     let Some(bar_label) = window.label().strip_prefix("menu-") else { return Ok(()) };
-    let Some(bar) = app.get_webview_window(bar_label) else { return Ok(()) };
-    let Some(monitor) = bars(&app).iter().find(|b| b.label == bar_label).map(|b| b.monitor) else { return Ok(()) };
+    let monitor = bars(&app).iter().find(|b| b.label == bar_label).map(|b| b.monitor);
+    // Its bar is gone (monitors changed): close, so a hidden menu doesn't keep holding the bar up.
+    let (Some(bar), Some(monitor)) = (app.get_webview_window(bar_label), monitor) else {
+        close_popup(window);
+        return Ok(());
+    };
     let scale = bar.scale_factor()?;
     let (w, h) = ((width * scale).round() as i32, (height * scale).round() as i32);
     let at = bar.outer_position()?;
