@@ -139,5 +139,11 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
 - **Adaptive colour** (asked for): every 0.75 s the 3 pixel rows just above the bar (above the gap, so the bar itself isn't read) are split in 8 bands; each band's median colour (so 1 px window borders don't count) tints the glass, dark text over light apps. Sent only when it changes.
 - **Date wrapped onto two lines and pushed the weather out of the bar** on a 1280 CSS px wide bar: right column now always gets its full width, the date never wraps, the left side gives way first (Now Playing shortens), and narrow bars drop the network speed (< 1400 px) and the song text (< 1000 px).
 
+### Bar layout and settings menu, 2026-11-12 (branch `bar-layout-settings`)
+- **Auto-hide over maximized apps:** with no edge reserved a maximized window covers the whole monitor and was taken for a fullscreen app, so the bar never came back. Now a window that is maximized (`IsZoomed`) and still has its frame (caption or resize border) doesn't count; F11 / video / games drop the frame and still hide the bar.
+- **"Fill the screen edge"** setting (`fill` in `settings.json`, off by default): the bar is the whole reserved strip, square corners (DWM `DONOTROUND`), no margin; the tint covers it all. Applies live.
+- **Reserved strip = what is drawn:** floating: bar + 6 px below + 2 px above (was 6 px above); fill: exactly the bar. The bar's place no longer follows the shell's `ABM_QUERYPOS` answer, which moved it up when another bottom AppBar (likely Explorer's hidden taskbar) still held space, seen after auto-hide on → off. Such mismatches and a work area that doesn't end at the strip are written to `pane.log`.
+- **Pane menu stays open:** it is an own glass popup (`menu.ts`, window `menu-<bar>`, sized by the page via `fit_menu`) instead of a native menu, which closes on every click. Switches and "Check for updates" keep it open; other actions, a click outside or Escape close it. The app icons' menu stays native.
+
 ## Open questions
 - None. (Spotify + Claude on the left: used since Phase 4, no objection from the user.)
