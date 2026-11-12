@@ -586,6 +586,12 @@ fn close_window(hwnd: isize) {
     apps::close(hwnd);
 }
 
+/// A click on a button of a window's thumbnail toolbar (in its preview).
+#[tauri::command]
+fn thumb_button(hwnd: isize, id: u32) {
+    apps::click_thumb_button(hwnd, id);
+}
+
 /// Hover preview of an app's windows above its icon; `left`/`right` are the icon's edges in CSS px in the bar.
 #[tauri::command]
 async fn show_preview(app: AppHandle, window: WebviewWindow, id: String, left: f64, right: f64) {
@@ -912,6 +918,7 @@ fn main() {
             get_status,
             activate,
             close_window,
+            thumb_button,
             show_preview,
             hide_preview,
             get_preview,
