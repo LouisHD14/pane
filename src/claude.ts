@@ -44,9 +44,6 @@ export function setClaudeLogo(url: string) {
   if (last) renderClaude(last.el, last.u);
 }
 
-/** The last Claude state, for the right-click menu ("log in again" when the login expired). */
-export const claudeState = () => last?.u ?? null;
-
 const mark = () => (logo ? `<img class="logo" src="${logo}" alt="" />` : GLYPH);
 
 /** Compact token count: 1234567 → "1.2M". */
@@ -84,11 +81,7 @@ export function renderClaude(el: HTMLElement, u: ClaudeUsage | null) {
   el.classList.toggle("relogin", u.source === "local" && u.note.includes("login"));
 }
 
-let codexLast: CodexUsage | null = null;
-export const codexState = () => codexLast;
-
 export function renderCodex(el: HTMLElement, u: CodexUsage | null) {
-  codexLast = u;
   el.hidden = !u;
   if (!u) return;
   if (u.source === "limits") put(el, `${CODEX_GLYPH}${limits(u)}`, title("Codex", u));

@@ -10,6 +10,9 @@ pub struct Settings {
     /// The bar floats over apps and slides away; it comes back when the mouse touches the bottom edge
     /// (like Windows' "Automatically hide the taskbar"). Off: the bar reserves its screen edge.
     pub autohide: bool,
+    /// The bar fills its screen edge from side to side with square corners, like Windows' own taskbar.
+    /// Off: a rounded glass bar floating a few px from the edges.
+    pub fill: bool,
     /// Tint the glass with the colours of the apps just above the bar.
     pub adaptive_color: bool,
     pub show_media: bool,
@@ -23,6 +26,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             autohide: false,
+            fill: false,
             adaptive_color: false,
             show_media: true,
             show_claude: true,
@@ -51,6 +55,7 @@ pub fn set(key: &str, on: bool) -> Option<Settings> {
     let mut s = get();
     let field = match key {
         "autohide" => &mut s.autohide,
+        "fill" => &mut s.fill,
         "adaptive_color" => &mut s.adaptive_color,
         "show_media" => &mut s.show_media,
         "show_claude" => &mut s.show_claude,

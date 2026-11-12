@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Source of docs/banner.png. Re-render from the docs folder (PowerShell):
+  & "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe" --headless --hide-scrollbars --force-device-scale-factor=1 --window-size=1600,400 "--screenshot=$PWD\banner.png" "file:///$PWD/banner.html"
+-->
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1600px; height: 400px; overflow: hidden; }
+  body {
+    background: radial-gradient(ellipse at 70% 130%, #1d4ed8 0%, #0b1e5b 45%, #050b24 100%);
+    font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+    color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 44px;
+  }
+  .title { text-align: center; }
+  h1 { margin: 0; font-size: 104px; font-weight: 600; letter-spacing: -2px; line-height: 1; }
+  p { margin: 14px 0 0; font-size: 30px; color: #c7d2fe; }
+  img { width: 1520px; border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+</style>
+<div class="title">
+  <h1>Pane</h1>
+  <p>A glass taskbar with widgets for Windows 11</p>
+</div>
+<img src="bar.png" alt="">
