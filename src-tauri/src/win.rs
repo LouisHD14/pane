@@ -22,8 +22,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindowVisible, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL,
-    WINDOW_EX_STYLE, WS_EX_TOOLWINDOW,
+    GetWindowThreadProcessId, IsWindowVisible, IsZoomed, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SW_HIDE, SW_SHOWNA,
+    SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CAPTION, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 
 /// Pane's data folder, %LOCALAPPDATA%\org.gruening.pane (the same one the uninstaller offers to delete).
@@ -242,7 +242,7 @@ pub fn press(keys: &[VIRTUAL_KEY]) {
 }
 
 /// True when the foreground window covers the whole `monitor` (a game or video in fullscreen).
-/// A maximized window doesn't count: it stops at the work area above Pane.
+/// A maximized window doesn't count, also not with auto-hide on, where no edge is reserved and it covers the monitor.
 pub fn fullscreen_on(monitor: RECT) -> bool {
     unsafe {
         let fg = GetForegroundWindow();
@@ -267,8 +267,16 @@ pub fn fullscreen_on(monitor: RECT) -> bool {
             return false;
         }
         let mut rect = RECT::default();
-        GetWindowRect(fg, &mut rect).is_ok() && covers(rect, monitor)
+        let style = WINDOW_STYLE(GetWindowLongPtrW(fg, GWL_STYLE) as u32);
+        GetWindowRect(fg, &mut rect).is_ok() && is_fullscreen(rect, monitor, IsZoomed(fg).as_bool(), style)
     }
+}
+
+/// Covers the monitor and isn't just maximized. A maximized window keeps its frame (caption or resize border);
+/// fullscreen apps drop it (browsers' F11 and video remove both, games use borderless popups).
+fn is_fullscreen(rect: RECT, monitor: RECT, zoomed: bool, style: WINDOW_STYLE) -> bool {
+    let framed = style.contains(WS_CAPTION) || style.contains(WS_THICKFRAME);
+    covers(rect, monitor) && !(zoomed && framed)
 }
 
 /// Tool windows never are fullscreen apps; the Snipping Tool's overlay is known by its process.
@@ -393,6 +401,21 @@ mod tests {
         assert!(!covers(RECT { left: -2560, top: 0, right: 0, bottom: 1440 }, monitor));
         // Maximized window: overhangs 8 px but stops above Pane's 48 px edge.
         assert!(!covers(RECT { left: -8, top: -8, right: 2568, bottom: 1400 }, monitor));
+    }
+
+    #[test]
+    fn maximized_window_over_whole_monitor_is_not_fullscreen() {
+        let monitor = RECT { left: 0, top: 0, right: 2560, bottom: 1440 };
+        // Auto-hide: nothing reserved, so a maximized window overhangs the whole monitor.
+        let maximized = RECT { left: -8, top: -8, right: 2568, bottom: 1448 };
+        let framed = WS_CAPTION | WS_THICKFRAME;
+        assert!(!is_fullscreen(maximized, monitor, true, framed));
+        // Browser F11 from a maximized window: still zoomed, but the frame is gone.
+        assert!(is_fullscreen(monitor, monitor, true, WINDOW_STYLE(0)));
+        // Borderless game, not zoomed.
+        assert!(is_fullscreen(monitor, monitor, false, WINDOW_STYLE(0x8000_0000)));
+        // A framed window the user dragged over the whole monitor isn't maximized: treated as fullscreen like before.
+        assert!(is_fullscreen(maximized, monitor, false, framed));
     }
 
     #[test]
