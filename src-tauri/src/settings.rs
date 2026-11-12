@@ -22,6 +22,9 @@ pub struct Settings {
     /// With several monitors: every bar shows the apps of all monitors. Off: each bar only the apps on its own
     /// monitor (pinned apps are on every bar either way).
     pub all_monitors: bool,
+    /// Draw the bars without the GPU (WebView2 --disable-gpu): ~60-100 MB less memory, a little CPU while
+    /// something animates (measured 2026-11-12). Read once at start, so it applies after a restart.
+    pub low_memory: bool,
     pub show_media: bool,
     pub show_claude: bool,
     pub show_codex: bool,
@@ -72,6 +75,7 @@ impl Default for Settings {
             adaptive_color: false,
             blend: false,
             all_monitors: false,
+            low_memory: false,
             show_media: true,
             show_claude: true,
             show_codex: true,
@@ -94,6 +98,7 @@ impl Settings {
             "adaptive_color" => &mut self.adaptive_color,
             "blend" => &mut self.blend,
             "all_monitors" => &mut self.all_monitors,
+            "low_memory" => &mut self.low_memory,
             "show_media" => &mut self.show_media,
             "show_claude" => &mut self.show_claude,
             "show_codex" => &mut self.show_codex,
@@ -183,7 +188,7 @@ mod tests {
     #[test]
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
-        assert!(s.autohide && s.show_media && !s.adaptive_color && !s.blend && !s.all_monitors && s.pin_order.is_empty());
+        assert!(s.autohide && s.show_media && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
         assert_eq!((s.glass, s.hide_delay_ms, s.slide_ms, s.size), (50, 700, 120, Size::Normal));
     }
 

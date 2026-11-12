@@ -324,7 +324,7 @@ fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let label = format!("preview-{}", COUNTER.fetch_add(1, SeqCst));
     let popup = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
         .title("Pane")
-        .additional_browser_args(crate::BROWSER_ARGS)
+        .additional_browser_args(crate::browser_args())
         .decorations(false)
         .transparent(true)
         .shadow(false)

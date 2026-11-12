@@ -31,10 +31,19 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ES
 const GAP: f64 = 6.0;
 /// ...and this far from maximized windows above it.
 const TOP_GAP: f64 = 2.0;
-/// WebView2 start options for every Pane window (all windows must use the same ones). Tauri's own
-/// defaults plus: one renderer process for all bars and the popup instead of one each (~30 MB each).
-const BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site --renderer-process-limit=1";
+/// WebView2 start options. Tauri's own defaults plus: one renderer process for all bars and the popup instead of
+/// one each (~30 MB each); with "Low memory mode" no GPU process either (~60-100 MB less, measured 2026-11-12).
+fn browser_args_for(low_memory: bool) -> String {
+    let args = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site --renderer-process-limit=1";
+    if low_memory { format!("{args} --disable-gpu") } else { args.to_string() }
+}
+
+/// The start options for every Pane window, fixed at the first call: all windows must use the same ones (WebView2
+/// refuses a second set in one process), so a changed "Low memory mode" applies after a restart.
+pub(crate) fn browser_args() -> &'static str {
+    static ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ARGS.get_or_init(|| browser_args_for(settings::get().low_memory))
+}
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// True while Pane is shown and the Windows taskbar is hidden. Changed only on the main thread.
@@ -242,7 +251,7 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
         let label = format!("bar-{generation}-{i}");
         let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Pane")
-            .additional_browser_args(BROWSER_ARGS)
+            .additional_browser_args(browser_args())
             .decorations(false)
             .transparent(true)
             .shadow(false)
@@ -786,7 +795,7 @@ fn tray_click(id: String, kind: tray::Click, x: i32, y: i32) {
 fn popup(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
     let popup = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("Pane")
-        .additional_browser_args(BROWSER_ARGS)
+        .additional_browser_args(browser_args())
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -890,7 +899,7 @@ async fn open_settings(app: AppHandle, window: WebviewWindow) -> tauri::Result<(
     };
     let settings = WebviewWindowBuilder::new(&app, SETTINGS, WebviewUrl::App("index.html".into()))
         .title("Pane settings")
-        .additional_browser_args(BROWSER_ARGS)
+        .additional_browser_args(browser_args())
         .transparent(true)
         // Windows 11's own glass for normal windows; dark like the bar.
         .effects(tauri::utils::config::WindowEffectsConfig {
@@ -1059,6 +1068,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn low_memory_mode_only_adds_no_gpu() {
+        assert!(!browser_args_for(false).contains("--disable-gpu"));
+        assert!(browser_args_for(true).ends_with(" --disable-gpu"));
+        assert!(browser_args_for(true).starts_with(&browser_args_for(false)), "the other options stay the same");
+    }
 
     #[test]
     fn reserved_strip_matches_the_drawn_bar() {
