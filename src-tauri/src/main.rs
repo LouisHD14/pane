@@ -148,7 +148,8 @@ fn place_bars(app: &AppHandle, show: bool) {
             } else {
                 win::reserve_edge(hwnd, strip);
             }
-            win::set_round(hwnd, !settings.fill);
+            // Square window corners when the window is the whole strip (fill, or the app-colour floor).
+            win::set_round(hwnd, !(settings.fill || settings.blend));
             win::pin(hwnd, Some(rc));
             let _ = window.set_position(PhysicalPosition::new(rc.left, rc.top));
             let _ = window.set_size(PhysicalSize::new((rc.right - rc.left) as u32, (rc.bottom - rc.top) as u32));

@@ -59,6 +59,10 @@ body.fill {
    the floating margins (6 px sides and bottom, 2 px top; main.rs GAP / TOP_GAP). Until the first colours
    arrive the floor is see-through, so it looks like the normal floating bar. */
 body.blend {
+  /* Padding, not a margin on .bar: a child's top margin collapses through <body> and moved the floor
+     2 px down, which showed the wallpaper above it (seen 2026-11-12). */
+  padding: 2px 6px 6px;
+  box-sizing: border-box;
   border-radius: 0;
   background: none;
   box-shadow: none;
@@ -69,8 +73,6 @@ body.blend.tinted::before {
 }
 
 body.blend .bar {
-  margin: 2px 6px 0;
-  height: calc(100% - 8px);
   border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.07) 40%, rgba(255, 255, 255, 0.04) 60%, rgba(255, 255, 255, 0.08)),
