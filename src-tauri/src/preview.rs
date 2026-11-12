@@ -327,7 +327,7 @@ fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .focused(false)
         .visible(false)
         .build()?;
-    crate::win::set_glass(HWND(popup.hwnd()?.0), crate::GLASS_TINT);
+    crate::win::set_glass(HWND(popup.hwnd()?.0), crate::settings::get().tint());
     Ok(popup)
 }
 
