@@ -103,7 +103,7 @@ tools/                    Test scripts, release.ps1
 The plan and design notes are in [`PLAN.md`](PLAN.md).
 
 ## License
-No license has been chosen yet. Until there is one, the code is visible but not licensed for reuse.
+MIT, see [LICENSE](LICENSE).
 
 ## Credits
 - Inspired by [LumaBar](https://lumabar.xyz). Pane has its own design and code.
