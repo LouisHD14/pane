@@ -173,3 +173,8 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
 
 ## Open questions
 - None. (Spotify + Claude on the left: used since Phase 4, no objection from the user.)
+
+### Memory, 2026-11-12 (branch `low-memory-setting`)
+- Real use is ~105-125 MB in Task Manager (private working set), not the ~400 MB summed working sets suggested; the 100 MB goal is close.
+- Tried and dropped (no clear gain in alternating A/B runs): WebView2 MemoryUsageTargetLevel Low for the bars, network service in-process, no crash reporter, V8 lite mode.
+- Kept: "Low memory mode (no GPU, applies after restart)" in the settings window, off by default (user's choice): `--disable-gpu` for all windows, ~20 MB less in Task Manager and ~70 MB less private memory, measured twice each; looks the same; costs a little CPU while something animates.

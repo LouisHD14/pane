@@ -11,6 +11,7 @@ export type Settings = {
   adaptive_color: boolean;
   blend: boolean;
   all_monitors: boolean;
+  low_memory: boolean;
   show_media: boolean;
   show_claude: boolean;
   show_codex: boolean;
