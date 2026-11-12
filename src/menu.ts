@@ -16,7 +16,15 @@ export type Settings = {
   show_codex: boolean;
   show_usage: boolean;
   show_weather: boolean;
+  /** Glass lightness 0 (dark) ..= 100 (light), 50 = the original look. */
+  glass: number;
+  hide_delay_ms: number;
+  slide_ms: number;
+  size: "small" | "normal" | "large";
 };
+
+/** The on/off settings. */
+export type Switch = { [K in keyof Settings]: Settings[K] extends boolean ? K : never }[keyof Settings];
 
 /** A switch (`checked` set) or an action, a separator or a heading. Actions close the menu unless `stay`;
  * `more` marks an entry that opens the second page (Settings). */
@@ -65,10 +73,10 @@ export async function menuPage() {
       render();
     };
     let update: Item = { text: "Check for updates", run: checkUpdate, stay: true };
-    const flip = (key: keyof Settings, text: string): Entry => ({
+    const flip = (key: Switch, text: string): Entry => ({
       text,
       checked: s[key],
-      run: () => invoke("set_setting", { key, on: !s[key] }), // the "settings" event redraws the menu
+      run: () => invoke("set_setting", { key, value: !s[key] }), // the "settings" event redraws the menu
     });
     const settingsPage = (): Entry[] => [
       { text: "Back", run: () => go("main"), stay: true },
@@ -96,6 +104,8 @@ export async function menuPage() {
           render();
         },
       },
+      "-",
+      { text: "More settings…", run: () => invoke("open_settings") },
     ];
     const mainPage = (): Entry[] => [
       { text: "Settings", run: () => go("settings"), stay: true, more: true },
