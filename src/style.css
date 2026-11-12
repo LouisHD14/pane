@@ -307,6 +307,22 @@ button:focus-visible {
   animation: pop 0.35s var(--spring);
 }
 
+/* Reordering pins (reorder.ts): the dragged icon follows the pointer above the others, which slide aside with the
+   buttons' transform transition; `settle` holds the dropped icon in place for one frame before it glides home. */
+.app.pinned {
+  touch-action: none;
+}
+
+.app.dragging {
+  z-index: 1;
+  transition: none;
+  background-color: var(--hover);
+}
+
+.apps.settle .app {
+  transition: none;
+}
+
 .app.leave {
   animation: pop 0.2s var(--ease) reverse forwards;
 }
