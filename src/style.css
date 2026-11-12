@@ -54,6 +54,36 @@ body.fill {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
+/* "App colour under the bar": the window is the whole reserved strip. The tint layer (::before) becomes an
+   opaque floor in the colours of the app's bottom edge, and the bar floats on it as its own glass slab with
+   the floating margins (6 px sides and bottom, 2 px top; main.rs GAP / TOP_GAP). Until the first colours
+   arrive the floor is see-through, so it looks like the normal floating bar. */
+body.blend {
+  /* Padding, not a margin on .bar: a child's top margin collapses through <body> and moved the floor
+     2 px down, which showed the wallpaper above it (seen 2026-11-12). */
+  padding: 2px 6px 6px;
+  box-sizing: border-box;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+body.blend.tinted::before {
+  opacity: 1;
+}
+
+/* A light glass layer over the floor (the user: full light-up was too much, none too little), a faint outline
+   and a soft shadow. */
+body.blend .bar {
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.05));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+body.blend.light .bar {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
 /* A soft light sweep across the glass when the bar appears. */
 body::after {
   content: "";
@@ -126,7 +156,8 @@ body.shine::after {
   grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   height: 100%;
-  padding: 0 6px;
+  /* 4 px on the right: the date block keeps the same 4 px gap to the right edge as to the top and bottom. */
+  padding: 0 4px 0 6px;
   box-sizing: border-box;
   white-space: nowrap;
 }
@@ -652,10 +683,10 @@ body.preview {
   flex-direction: column;
   justify-content: center;
   flex-shrink: 0;
-  height: 40px;
+  height: 40px; /* bar 48 px: 4 px above and below, as on the right */
   background: var(--glass);
   border: 1px solid var(--glass-border);
-  border-radius: 10px;
+  border-radius: 5px; /* follows the bar's 8 px corner 4 px further in (was 10 px: rounder than the bar) */
   box-sizing: border-box;
   overflow: hidden;
   transition: background-color 0.18s var(--ease), transform 0.15s var(--ease);

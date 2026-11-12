@@ -1,6 +1,6 @@
 [package]
 name = "pane"
-version = "0.8.0"
+version = "0.8.1"
 description = "Own Windows 11 taskbar replacement with widgets"
 edition = "2021"
 

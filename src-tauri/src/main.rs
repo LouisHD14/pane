@@ -4,6 +4,7 @@
 mod apps;
 mod claude;
 mod codex;
+mod colors;
 mod http;
 mod media;
 mod preview;
@@ -62,6 +63,13 @@ struct Bars(Mutex<Vec<Bar>>);
 static HOLD: AtomicBool = AtomicBool::new(false);
 
 impl Bar {
+    /// The bar window's rect: the bar itself, or with "App colour under the bar" the whole strip (the page paints
+    /// the strip in the app's colours and draws the floating bar inside it with the same margins).
+    fn window(&self, s: &settings::Settings) -> RECT {
+        let (strip, bar) = self.layout(s.fill);
+        if s.blend && !s.fill { strip } else { bar }
+    }
+
     /// (strip reserved at the bottom of the monitor, the bar window's rect) in physical px.
     fn layout(&self, fill: bool) -> (RECT, RECT) {
         let px = |logical: f64| (self.height as f64 * logical / BAR_HEIGHT).round() as i32;
@@ -130,22 +138,68 @@ fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
     on_main(app, move |h| set_shown(h, show(SHOWN.load(SeqCst))));
 }
 
+/// Running auto-hide slides: bar label -> the slide that may still move it (newer slides and place_bars win).
+static SLIDES: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
+static SLIDE_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Auto-hide: slides the whole bar window (glass and icons together) between its place `rc` and just below the
+/// monitor's bottom edge in ~120 ms, no bounce (decided with the user 2026-11-12). Up: fast, then settling (ease-out);
+/// down: slow start, then away (ease-in). Ease-out on the way down rushed off and left a thin strip lingering at
+/// the edge, which looked like the bar disappeared weirdly. Hidden at the end of
+/// a slide down and parked back at its place, so everything else still finds it where it belongs.
+fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
+    const FRAMES: i32 = 8;
+    let id = SLIDE_ID.fetch_add(1, SeqCst);
+    SLIDES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(label.clone(), id);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let (from, to) = if show { (below, rc.top) } else { (rc.top, below) };
+        for i in 0..=FRAMES {
+            let t = i as f64 / FRAMES as f64;
+            let eased = if show { 1.0 - (1.0 - t).powi(3) } else { t.powi(3) };
+            let top = from + ((to - from) as f64 * eased).round() as i32;
+            let label = label.clone();
+            on_main(&app, move |h| {
+                let current = SLIDES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|s| s.get(&label).copied());
+                if current != Some(id) {
+                    return; // a newer slide or place_bars took over
+                }
+                let Some(hwnd) = h.get_webview_window(&label).and_then(|w| w.hwnd().ok()).map(|h| HWND(h.0)) else { return };
+                win::pin(hwnd, Some(RECT { top, bottom: top + rc.bottom - rc.top, ..rc }));
+                win::move_to(hwnd, rc.left, top);
+                if show && i == 0 {
+                    win::show_inactive(hwnd);
+                }
+                if !show && i == FRAMES {
+                    win::hide(hwnd);
+                    win::pin(hwnd, Some(rc));
+                    win::move_to(hwnd, rc.left, rc.top);
+                }
+            });
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    });
+}
+
 /// Main thread only.
 fn place_bars(app: &AppHandle, show: bool) {
     let settings = settings::get();
+    // Settings or monitors changed: any running slide would put the bar back at an old place.
+    SLIDES.lock().unwrap_or_else(|e| e.into_inner()).take();
     for bar in bars(app).iter_mut() {
         let Some(window) = app.get_webview_window(&bar.label) else { continue };
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            let (strip, rc) = bar.layout(settings.fill);
+            let (strip, rc) = (bar.layout(settings.fill).0, bar.window(&settings));
             if settings.autohide {
                 // Floats over the apps: nothing is reserved, the bar takes the same place as otherwise.
                 win::release_edge(hwnd);
             } else {
                 win::reserve_edge(hwnd, strip);
             }
-            win::set_round(hwnd, !settings.fill);
+            // Square window corners when the window is the whole strip (fill, or the app-colour floor).
+            win::set_round(hwnd, !(settings.fill || settings.blend));
             win::pin(hwnd, Some(rc));
             let _ = window.set_position(PhysicalPosition::new(rc.left, rc.top));
             let _ = window.set_size(PhysicalSize::new((rc.right - rc.left) as u32, (rc.bottom - rc.top) as u32));
@@ -193,6 +247,7 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
             .visible(false)
             .build()?;
         win::set_glass(HWND(window.hwnd()?.0), GLASS_TINT);
+        win::no_transitions(HWND(window.hwnd()?.0));
         new.push(Bar { label, monitor, height, fullscreen: false, concealed: false, left_at: None });
     }
     *bars(app) = new;
@@ -263,11 +318,12 @@ static LAST_APPS: Mutex<Option<HashMap<String, Vec<apps::AppItem>>>> = Mutex::ne
 /// (focus, title, redraw); before, every one of them re-rendered every bar.
 fn push_apps(app: &AppHandle) {
     let targets: Vec<(String, RECT)> = bars(app).iter().map(|b| (b.label.clone(), b.monitor)).collect();
+    let all = settings::get().all_monitors;
     let mut last = LAST_APPS.lock().unwrap_or_else(|e| e.into_inner());
     let last = last.get_or_insert_with(HashMap::new);
     last.retain(|label, _| targets.iter().any(|(l, _)| l == label));
     for (label, monitor) in targets {
-        let now = apps::list(monitor);
+        let now = apps::list((!all).then_some(monitor));
         if last.get(&label) != Some(&now) {
             let _ = app.emit_to(label.as_str(), "apps", &now);
             preview::apps_changed(&label, &now);
@@ -322,7 +378,8 @@ fn autohide_loop(app: AppHandle) {
         std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
         let hold = HOLD.load(SeqCst) || preview::is_open();
-        let fill = settings::get().fill;
+        let settings = settings::get();
+        let fill = settings.fill;
         let mut changes = Vec::new();
         for bar in bars(&app).iter_mut() {
             let m = bar.monitor;
@@ -331,64 +388,50 @@ fn autohide_loop(app: AppHandle) {
             if bar.concealed {
                 if inside && y >= m.bottom - 2 && !bar.fullscreen {
                     (bar.concealed, bar.left_at) = (false, None);
-                    changes.push((bar.label.clone(), true));
+                    changes.push((bar.label.clone(), bar.window(&settings), m.bottom, true));
                 }
             } else if over || hold || bar.fullscreen {
                 bar.left_at = None;
             } else if bar.left_at.get_or_insert_with(Instant::now).elapsed() > Duration::from_millis(700) {
                 bar.concealed = true;
-                changes.push((bar.label.clone(), false));
+                changes.push((bar.label.clone(), bar.window(&settings), m.bottom, false));
             }
         }
-        for (label, show) in changes {
-            on_main(&app, move |h| {
-                let Some(window) = h.get_webview_window(&label) else { return };
-                if show {
-                    if let Ok(hwnd) = window.hwnd() {
-                        win::show_inactive(HWND(hwnd.0));
-                    }
-                    let _ = h.emit_to(label.as_str(), "shown", ()); // slide-in animation
-                } else {
-                    if let Ok(hwnd) = window.hwnd() {
-                        win::hide(HWND(hwnd.0));
-                    }
-                }
-            });
+        for (label, rc, below, show) in changes {
+            slide(&app, label, rc, below, show);
         }
     });
 }
 
-/// Adaptive colour: every 0.75 s, the colours of the apps just above each bar (8 bands, left to right),
-/// sent to that bar when they changed. Only while the setting is on and the bar is visible.
+/// Adaptive colour and the app-colour floor: every 0.75 s, the colours of the app sitting on each bar
+/// (colors.rs), sent to that bar once they held still. Only while one of the settings is on and the bar is visible.
 fn tint_loop(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut last: HashMap<String, Vec<[u8; 3]>> = HashMap::new();
+        let mut steady: HashMap<String, colors::Steady> = HashMap::new();
         let mut was_on = false;
         loop {
             std::thread::sleep(Duration::from_millis(750));
-            let on = SHOWN.load(SeqCst) && settings::get().adaptive_color;
+            let s = settings::get();
+            let on = SHOWN.load(SeqCst) && (s.adaptive_color || s.blend);
             if !on {
                 if was_on {
                     let _ = app.emit("tint", None::<Vec<[u8; 3]>>);
-                    last.clear();
+                    steady.clear();
                 }
                 was_on = false;
                 continue;
             }
             was_on = true;
             let fill = settings::get().fill;
-            // Just above the reserved strip, so the bar itself isn't read.
-            let targets: Vec<(String, RECT)> =
-                bars(&app).iter().filter(|b| !b.concealed && !b.fullscreen).map(|b| (b.label.clone(), b.layout(fill).0)).collect();
-            for (label, strip) in targets {
-                let rect = app.get_webview_window(&label).and_then(|w| w.hwnd().ok()).and_then(|h| win::window_rect(HWND(h.0)));
-                let Some(rc) = rect else { continue };
-                let Some(colors) = win::screen_colors(rc.left, rc.right, strip.top, 8) else { continue };
-                // Rounded to steps of 8, so a blinking cursor or a video doesn't resend it every time.
-                let colors: Vec<[u8; 3]> = colors.into_iter().map(|c| c.map(|v| v & 0xF8)).collect();
-                if last.get(&label) != Some(&colors) {
-                    let _ = app.emit_to(label.as_str(), "tint", Some(&colors));
-                    last.insert(label, colors);
+            let targets: Vec<(String, RECT, RECT)> = bars(&app)
+                .iter()
+                .filter(|b| !b.concealed && !b.fullscreen)
+                .map(|b| (b.label.clone(), b.layout(fill).0, b.monitor))
+                .collect();
+            for (label, strip, monitor) in targets {
+                let now = colors::app_floor(monitor, strip, 8);
+                if let Some(show) = steady.entry(label.clone()).or_default().feed(now) {
+                    let _ = app.emit_to(label.as_str(), "tint", show);
                 }
             }
         }
@@ -524,7 +567,8 @@ fn quit(app: AppHandle) {
 #[tauri::command]
 async fn get_apps(app: AppHandle, window: WebviewWindow) -> Vec<apps::AppItem> {
     let monitor = bars(&app).iter().find(|b| b.label == window.label()).map(|b| b.monitor);
-    monitor.map(apps::list).unwrap_or_default()
+    let all = settings::get().all_monitors;
+    monitor.map(|m| apps::list((!all).then_some(m))).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -661,8 +705,11 @@ fn get_settings() -> settings::Settings {
 fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settings> {
     let now = settings::set(&key, on)?;
     let _ = app.emit("settings", &now);
-    if (key == "autohide" || key == "fill") && SHOWN.load(SeqCst) {
+    if matches!(key.as_str(), "autohide" | "fill" | "blend") && SHOWN.load(SeqCst) {
         on_main(&app, |h| place_bars(h, true));
+    }
+    if key == "all_monitors" {
+        push_apps(&app);
     }
     if key == "show_codex" && on {
         let h = app.clone();
