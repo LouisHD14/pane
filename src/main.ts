@@ -11,7 +11,16 @@ import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexU
 import { applyTint } from "./tint";
 import { menuPage, type Settings } from "./menu";
 
-type WinItem = { hwnd: number; title: string; active: boolean; badge: string; badge_tip: string; flashing: boolean };
+type Progress = { state: "normal" | "paused" | "error" | "indeterminate"; value: number };
+type WinItem = {
+  hwnd: number;
+  title: string;
+  active: boolean;
+  badge: string;
+  badge_tip: string;
+  flashing: boolean;
+  progress: Progress | null;
+};
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
 type Item = MenuItemOptions | PredefinedMenuItemOptions;
 
@@ -35,7 +44,17 @@ else if (me.label.startsWith("menu-")) menuPage();
 else if (me.label.startsWith("preview-")) previewPage();
 else barPage();
 
-type Card = { hwnd: number; title: string; active: boolean; rect: number[]; body: number[]; live: boolean };
+type ThumbButton = { id: number; icon: string; tip: string; enabled: boolean; inert: boolean; flat: boolean; dismiss: boolean };
+type Card = {
+  hwnd: number;
+  title: string;
+  active: boolean;
+  rect: number[];
+  body: number[];
+  live: boolean;
+  buttons: ThumbButton[];
+  bar: number[];
+};
 type Preview = { icon: string; cards: Card[] };
 
 /** Window previews above an app icon. Rust lays out the cards and DWM draws the live images into each `body`. */
@@ -43,13 +62,42 @@ function previewPage() {
   document.body.classList.add("preview");
   const px = (el: HTMLElement, [x, y, w, h]: number[]) =>
     Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+  const closeWindow = (c: Card) => invoke("close_window", { hwnd: c.hwnd });
+  // The app's own buttons (play/pause/next...), like under Windows' previews; a click reaches the app as WM_COMMAND.
+  const toolbar = (c: Card) => {
+    const bar = Object.assign(document.createElement("div"), { className: "card-buttons" });
+    bar.setAttribute("role", "toolbar");
+    bar.setAttribute("aria-label", `${c.title} controls`);
+    px(bar, c.bar);
+    bar.append(
+      ...c.buttons.map((t) => {
+        const b = Object.assign(document.createElement("button"), { className: "thumb-button", title: t.tip, disabled: !t.enabled });
+        b.setAttribute("aria-label", t.tip || `Button ${t.id}`);
+        b.classList.toggle("flat", t.flat);
+        if (t.icon) b.append(Object.assign(document.createElement("img"), { src: t.icon, alt: "" }));
+        if (t.inert) {
+          b.classList.add("inert");
+          b.tabIndex = -1;
+        } else {
+          b.onclick = () => {
+            invoke("thumb_button", { hwnd: c.hwnd, id: t.id });
+            if (t.dismiss) invoke("hide_preview");
+          };
+        }
+        return b;
+      }),
+    );
+    return bar;
+  };
   const show = (p: Preview | null) => {
     if (!p) return;
     document.body.replaceChildren(
       ...p.cards.map((c) => {
-        const card = Object.assign(document.createElement("button"), { className: "card", title: c.title });
+        const card = Object.assign(document.createElement("div"), { className: "card" });
         card.classList.toggle("active", c.active);
-        card.setAttribute("aria-label", `Switch to ${c.title}`);
+        px(card, c.rect);
+        const main = Object.assign(document.createElement("button"), { className: "card-main", title: c.title });
+        main.setAttribute("aria-label", `Switch to ${c.title}`);
         const title = Object.assign(document.createElement("span"), { className: "card-title", textContent: c.title });
         // Height of the title row = where the image starts.
         Object.assign(title.style, { height: `${c.body[1]}px`, lineHeight: `${c.body[1]}px` });
@@ -57,9 +105,16 @@ function previewPage() {
         body.className = c.live ? "card-body" : "card-body minimized";
         px(body, c.body);
         if (!c.live && p.icon) body.append(Object.assign(document.createElement("img"), { src: p.icon, alt: "" }));
-        card.append(title, body);
-        px(card, c.rect);
-        card.onclick = () => invoke("focus_window", { hwnd: c.hwnd });
+        main.append(title, body);
+        main.onclick = () => invoke("focus_window", { hwnd: c.hwnd });
+        const close = Object.assign(document.createElement("button"), { className: "card-close", textContent: "✕", title: "Close window" });
+        close.setAttribute("aria-label", `Close ${c.title}`);
+        close.onclick = () => closeWindow(c);
+        card.append(main, close);
+        if (c.buttons.length) card.append(toolbar(c));
+        // Middle-click closes the window, like on Windows' previews (and never starts autoscroll).
+        card.addEventListener("mousedown", (e) => e.button === 1 && e.preventDefault());
+        card.addEventListener("auxclick", (e) => e.button === 1 && closeWindow(c));
         return card;
       }),
     );
@@ -247,8 +302,10 @@ function updateAppButton(b: HTMLElement, app: AppItem) {
   // The app's badge (unread count / dot) from its first window that has one, like the Windows taskbar.
   const badged = app.windows.find((w) => w.badge);
   const tip = badged?.badge_tip ? ` (${badged.badge_tip})` : "";
+  // Progress (a download, a copy) from its first window that has one, like the Windows taskbar.
+  const progress = app.windows.find((w) => w.progress)?.progress;
   b.title = (app.windows.length === 1 ? app.windows[0].title : app.name) + tip;
-  b.setAttribute("aria-label", app.name + tip);
+  b.setAttribute("aria-label", app.name + tip + (progress ? `, ${progressText(progress)}` : ""));
   b.classList.toggle("running", app.windows.length > 0);
   b.classList.toggle("active", app.windows.some((w) => w.active));
   // Asks for attention (FlashWindowEx) until the window is brought to front.
@@ -270,7 +327,20 @@ function updateAppButton(b: HTMLElement, app: AppItem) {
   }
   if (badged && badge!.src !== badged.badge) badge!.src = badged.badge;
   if (!badged) badge?.remove();
+  // A thin bar under the icon in place of the running line; CSS colours it by state (data-state).
+  let bar = b.querySelector<HTMLElement>(".progress");
+  if (progress) {
+    bar ??= b.appendChild(Object.assign(document.createElement("span"), { className: "progress" }));
+    bar.dataset.state = progress.state;
+    bar.style.setProperty("--p", String(progress.value));
+  } else bar?.remove();
+  b.classList.toggle("progressing", !!progress);
   b.onclick = () => clickApp(app, b);
+}
+
+function progressText(p: Progress): string {
+  const pct = `${Math.round(p.value * 100)} %`;
+  return { normal: pct, paused: `paused at ${pct}`, error: `error at ${pct}`, indeterminate: "busy" }[p.state];
 }
 
 /** No window: start it (icon bounces). One window: front / minimize. Several: cycle through them. */

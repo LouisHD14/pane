@@ -396,6 +396,63 @@ button:focus-visible {
   background: var(--accent);
 }
 
+/* Progress (ITaskbarList3, e.g. a download): a thin bar under the icon in place of the running line. Green, yellow
+   when paused, red on error; a sliding light while the app can't tell how far it is (the only animation, and only
+   then). Windows 11's status colours. */
+.app.progressing::after {
+  opacity: 0;
+}
+
+.app .progress {
+  --c: #6ccb5f;
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  bottom: 2px;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.app .progress::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(var(--p, 0) * 100%);
+  border-radius: inherit;
+  background: var(--c);
+  transition: width 0.3s var(--ease), background-color 0.3s var(--ease);
+}
+
+.app .progress[data-state="paused"] {
+  --c: #fce100;
+}
+
+.app .progress[data-state="error"] {
+  --c: #ff99a4;
+}
+
+.app .progress[data-state="indeterminate"]::before {
+  width: 40%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app .progress[data-state="indeterminate"]::before {
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
 /* ---------- Tray */
 .tray,
 .hidden-icons {
@@ -466,26 +523,105 @@ body.preview {
   animation: fade 0.15s var(--ease);
 }
 
+/* A card: the switch button over all of it, a close button in the title row, the app's toolbar under the image. */
 .card {
   position: absolute;
-  padding: 0;
   overflow: hidden;
-  text-align: left;
+  border-radius: 7px;
+  transition: background-color 0.18s var(--ease);
 }
 
-/* No press shrink: the live image is drawn by DWM at a fixed place and wouldn't shrink with the card. */
-.card:active {
-  transform: none;
+.card:hover {
+  background-color: var(--hover);
+}
+
+.card:has(.card-main:active) {
+  background-color: var(--press);
 }
 
 .card.active {
   box-shadow: inset 0 0 0 1px var(--glass-border);
 }
 
+/* No press shrink: the live image is drawn by DWM at a fixed place and wouldn't shrink with the card. */
+.card-main,
+.card-main:hover,
+.card-main:active {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  transform: none;
+}
+
+/* Shows on hover (or keyboard focus), Windows' red on its own hover. */
+.card-close {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 20px;
+  border-radius: 5px;
+  opacity: 0;
+}
+
+.card:hover .card-close,
+.card-close:focus-visible {
+  opacity: 1;
+}
+
+.card-close:hover {
+  background-color: #c42b1c;
+  color: #fff;
+}
+
+.card-buttons {
+  position: absolute;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+}
+
+.thumb-button {
+  width: 32px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background-color: var(--glass);
+}
+
+.thumb-button.flat {
+  background-color: transparent;
+}
+
+.thumb-button.flat:hover {
+  background-color: var(--hover);
+}
+
+.thumb-button img {
+  width: 16px;
+  height: 16px;
+}
+
+.thumb-button:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.thumb-button.inert {
+  pointer-events: none;
+}
+
 .card-title {
   position: absolute;
   left: 10px;
-  right: 10px;
+  right: 30px;
   top: 0;
   overflow: hidden;
   text-overflow: ellipsis;
