@@ -10,6 +10,7 @@ import { once, replay } from "./anim";
 import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
 import { applyTint } from "./tint";
 import { menuPage, type Settings } from "./menu";
+import { settingsPage } from "./settings";
 
 type WinItem = { hwnd: number; title: string; active: boolean; badge: string; badge_tip: string; flashing: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
@@ -26,13 +27,30 @@ function applySettings(s: Settings) {
   if (!s.adaptive_color && !s.blend) applyTint(null);
 }
 
+/** Bar contents scale with the bar height (settings.rs `Size::height`; 48 px is what the CSS sizes are for). */
+const ZOOM = { small: 40 / 48, normal: 1, large: 56 / 48 };
+
+/** Glass lightness (50 = the original look; Rust changes the acrylic tint) and bar size, on every page. */
+function applyLook(s: Settings) {
+  const root = document.documentElement.style;
+  // Lighter: a white sheen over the glass. Darker: only the app-colour floor's slab needs a shade (no acrylic under it).
+  root.setProperty("--wash", String((Math.max(0, s.glass - 50) / 50) * 0.2));
+  root.setProperty("--shade", String((Math.max(0, 50 - s.glass) / 50) * 0.4));
+  root.setProperty("--bar-zoom", String(ZOOM[s.size] ?? 1));
+}
+
 const me = getCurrentWebviewWindow();
 const $ = (id: string) => document.getElementById(id)!;
 
-// The popups ("hidden icons", Pane menu, window preview) load the same page; the window label tells them apart from a bar.
+invoke<Settings>("get_settings").then(applyLook);
+me.listen<Settings>("settings", (e) => applyLook(e.payload));
+
+// The popups ("hidden icons", Pane menu, window preview) and the settings window load the same page; the window
+// label tells them apart from a bar.
 if (me.label.startsWith("overflow-")) overflowPage();
 else if (me.label.startsWith("menu-")) menuPage();
 else if (me.label.startsWith("preview-")) previewPage();
+else if (me.label === "settings") settingsPage();
 else barPage();
 
 type Card = { hwnd: number; title: string; active: boolean; rect: number[]; body: number[]; live: boolean };

@@ -8,6 +8,10 @@
   --accent: #4cc2ff;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Glass lightness (main.ts applyLook): white sheen when lighter, shade on the app-colour slab when darker.
+     Both 0 at the default, which is the original look. */
+  --wash: 0;
+  --shade: 0;
   color-scheme: dark;
 }
 
@@ -39,6 +43,7 @@ body {
   position: relative;
   border-radius: 8px;
   background:
+    linear-gradient(rgb(255 255 255 / var(--wash)), rgb(255 255 255 / var(--wash))),
     linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05) 40%, rgba(255, 255, 255, 0.02) 60%, rgba(255, 255, 255, 0.06)),
     radial-gradient(120% 140% at 50% -40%, rgba(255, 255, 255, 0.12), transparent 60%);
   box-shadow:
@@ -76,7 +81,9 @@ body.blend.tinted::before {
    and a soft shadow. */
 body.blend .bar {
   border-radius: 8px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.05));
+  background:
+    linear-gradient(rgb(0 0 0 / var(--shade)), rgb(0 0 0 / var(--shade))),
+    linear-gradient(180deg, rgb(255 255 255 / calc(0.09 + var(--wash))), rgb(255 255 255 / calc(0.05 + var(--wash))));
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
@@ -160,6 +167,8 @@ body.shine::after {
   padding: 0 4px 0 6px;
   box-sizing: border-box;
   white-space: nowrap;
+  /* Bar height small / large: every px size below is for the 48 px bar and scales with it (height: 100% doesn't). */
+  zoom: var(--bar-zoom, 1);
 }
 
 .bar.enter {
@@ -986,6 +995,158 @@ body.preview {
 
 .update.pop-in {
   animation: pop 0.35s var(--spring);
+}
+
+/* ---------- Settings window (settings.ts): Windows' Mica glass behind a transparent page, our colours on top. */
+html.settings,
+body.settings {
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+}
+
+body.settings {
+  border-radius: 0;
+  background: rgb(10 12 20 / 0.25);
+  box-shadow: none;
+  scrollbar-width: thin;
+}
+
+body.settings::before,
+body.settings::after {
+  display: none;
+}
+
+.settings-page {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 8px 20px 20px;
+}
+
+.settings-page h1 {
+  margin: 8px 4px 14px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.group {
+  margin: 0 0 12px;
+  padding: 4px 0;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass);
+}
+
+.group > legend {
+  padding: 0 6px;
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 2px 14px;
+}
+
+.row.slider {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 0;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.row.slider input {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 4px 0 0;
+}
+
+.row output,
+.note {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.choices {
+  margin: 0;
+  border: 0;
+}
+
+/* Legend floats so it sits in the row like the other labels. */
+.choices > legend {
+  float: left;
+  padding: 0;
+  line-height: 36px;
+}
+
+.choices > div {
+  display: flex;
+  gap: 14px;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-page input {
+  accent-color: var(--accent);
+}
+
+/* On/off switch drawn from a checkbox (still a checkbox for keyboard and screen readers, role="switch"). */
+.switch {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid var(--text-dim);
+  border-radius: 10px;
+  background: transparent;
+  transition: background-color 0.18s var(--ease), border-color 0.18s var(--ease);
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.2s var(--spring);
+}
+
+.switch:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch:checked::after {
+  background: #001a2b;
+  transform: translateX(20px);
+}
+
+.settings-page input:focus-visible,
+.settings-page button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+.button {
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
 }
 
 /* Windows "Animation effects" off → no motion. */

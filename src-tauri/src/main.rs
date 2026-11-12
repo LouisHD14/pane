@@ -27,8 +27,6 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_SHIFT};
 
-/// Bar height in logical pixels, the same as the Windows 11 taskbar.
-const BAR_HEIGHT: f64 = 48.0;
 /// The floating bar keeps this far (logical px) from the screen edges...
 const GAP: f64 = 6.0;
 /// ...and this far from maximized windows above it.
@@ -37,8 +35,6 @@ const TOP_GAP: f64 = 2.0;
 /// defaults plus: one renderer process for all bars and the popup instead of one each (~30 MB each).
 const BROWSER_ARGS: &str =
     "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --process-per-site --renderer-process-limit=1";
-/// Glass tint 0xAABBGGRR: a dark blue-grey covering ~25 % of the blur, so the background shines through.
-const GLASS_TINT: u32 = 0x40_1A_12_10;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// True while Pane is shown and the Windows taskbar is hidden. Changed only on the main thread.
@@ -49,7 +45,8 @@ static GENERATION: AtomicUsize = AtomicUsize::new(0);
 struct Bar {
     label: String,
     monitor: RECT,
-    height: i32,
+    /// The monitor's DPI scale (1.0 = 96 dpi).
+    scale: f64,
     /// Hidden because a fullscreen app (game, video) is in front on this monitor.
     fullscreen: bool,
     /// Auto-hide: slid away until the mouse touches the bottom edge.
@@ -66,14 +63,15 @@ impl Bar {
     /// The bar window's rect: the bar itself, or with "App colour under the bar" the whole strip (the page paints
     /// the strip in the app's colours and draws the floating bar inside it with the same margins).
     fn window(&self, s: &settings::Settings) -> RECT {
-        let (strip, bar) = self.layout(s.fill);
+        let (strip, bar) = self.layout(s);
         if s.blend && !s.fill { strip } else { bar }
     }
 
     /// (strip reserved at the bottom of the monitor, the bar window's rect) in physical px.
-    fn layout(&self, fill: bool) -> (RECT, RECT) {
-        let px = |logical: f64| (self.height as f64 * logical / BAR_HEIGHT).round() as i32;
-        layout(self.monitor, self.height, if fill { 0 } else { px(GAP) }, if fill { 0 } else { px(TOP_GAP) })
+    fn layout(&self, s: &settings::Settings) -> (RECT, RECT) {
+        let px = |logical: f64| (logical * self.scale).round() as i32;
+        let (gap, top_gap) = if s.fill { (0, 0) } else { (px(GAP), px(TOP_GAP)) };
+        layout(self.monitor, px(s.size.height()), gap, top_gap)
     }
 }
 
@@ -143,19 +141,19 @@ static SLIDES: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 static SLIDE_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Auto-hide: slides the whole bar window (glass and icons together) between its place `rc` and just below the
-/// monitor's bottom edge in ~120 ms, no bounce (decided with the user 2026-11-12). Up: fast, then settling (ease-out);
-/// down: slow start, then away (ease-in). Ease-out on the way down rushed off and left a thin strip lingering at
+/// monitor's bottom edge in `slide_ms` (default 120 ms), no bounce (decided with the user 2026-11-12).
+/// Up: fast, then settling (ease-out); down: slow start, then away (ease-in). Ease-out on the way down rushed off and left a thin strip lingering at
 /// the edge, which looked like the bar disappeared weirdly. Hidden at the end of
 /// a slide down and parked back at its place, so everything else still finds it where it belongs.
 fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
-    const FRAMES: i32 = 8;
+    let frames = slide_frames(settings::get().slide_ms);
     let id = SLIDE_ID.fetch_add(1, SeqCst);
     SLIDES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(label.clone(), id);
     let app = app.clone();
     std::thread::spawn(move || {
         let (from, to) = if show { (below, rc.top) } else { (rc.top, below) };
-        for i in 0..=FRAMES {
-            let t = i as f64 / FRAMES as f64;
+        for i in 0..=frames {
+            let t = i as f64 / frames as f64;
             let eased = if show { 1.0 - (1.0 - t).powi(3) } else { t.powi(3) };
             let top = from + ((to - from) as f64 * eased).round() as i32;
             let label = label.clone();
@@ -170,15 +168,22 @@ fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
                 if show && i == 0 {
                     win::show_inactive(hwnd);
                 }
-                if !show && i == FRAMES {
+                if !show && i == frames {
                     win::hide(hwnd);
                     win::pin(hwnd, Some(rc));
                     win::move_to(hwnd, rc.left, rc.top);
                 }
             });
-            std::thread::sleep(Duration::from_millis(15));
+            std::thread::sleep(Duration::from_millis(FRAME_MS));
         }
     });
+}
+
+const FRAME_MS: u64 = 15;
+
+/// Steps of a slide that takes `ms` (at least one: 0 ms jumps straight there).
+fn slide_frames(ms: u32) -> i32 {
+    ((ms as f64 / FRAME_MS as f64).round() as i32).max(1)
 }
 
 /// Main thread only.
@@ -191,7 +196,7 @@ fn place_bars(app: &AppHandle, show: bool) {
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            let (strip, rc) = (bar.layout(settings.fill).0, bar.window(&settings));
+            let (strip, rc) = (bar.layout(&settings).0, bar.window(&settings));
             if settings.autohide {
                 // Floats over the apps: nothing is reserved, the bar takes the same place as otherwise.
                 win::release_edge(hwnd);
@@ -216,14 +221,14 @@ fn place_bars(app: &AppHandle, show: bool) {
     }
 }
 
-fn monitor_rects(app: &AppHandle) -> Vec<(RECT, i32)> {
+fn monitor_rects(app: &AppHandle) -> Vec<(RECT, f64)> {
     let monitors = app.available_monitors().unwrap_or_default();
     monitors
         .iter()
         .map(|m| {
             let (pos, size) = (m.position(), m.size());
             let rect = RECT { left: pos.x, top: pos.y, right: pos.x + size.width as i32, bottom: pos.y + size.height as i32 };
-            (rect, (BAR_HEIGHT * m.scale_factor()).round() as i32)
+            (rect, m.scale_factor())
         })
         .collect()
 }
@@ -232,7 +237,8 @@ fn monitor_rects(app: &AppHandle) -> Vec<(RECT, i32)> {
 fn create_bars(app: &AppHandle) -> tauri::Result<()> {
     let generation = GENERATION.fetch_add(1, SeqCst);
     let mut new = Vec::new();
-    for (i, (monitor, height)) in monitor_rects(app).into_iter().enumerate() {
+    let tint = settings::get().tint();
+    for (i, (monitor, scale)) in monitor_rects(app).into_iter().enumerate() {
         let label = format!("bar-{generation}-{i}");
         let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
             .title("Pane")
@@ -246,9 +252,9 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
             .focused(false)
             .visible(false)
             .build()?;
-        win::set_glass(HWND(window.hwnd()?.0), GLASS_TINT);
+        win::set_glass(HWND(window.hwnd()?.0), tint);
         win::no_transitions(HWND(window.hwnd()?.0));
-        new.push(Bar { label, monitor, height, fullscreen: false, concealed: false, left_at: None });
+        new.push(Bar { label, monitor, scale, fullscreen: false, concealed: false, left_at: None });
     }
     *bars(app) = new;
     Ok(())
@@ -369,9 +375,9 @@ fn codex_loop(app: AppHandle) {
     });
 }
 
-/// Auto-hide: shows a bar when the mouse touches the bottom edge of its monitor and hides it ~0.7 s after
-/// the mouse left it. Polls the cursor every 60 ms, only while auto-hide is on (a mouse hook would run on
-/// every mouse move in every app).
+/// Auto-hide: shows a bar when the mouse touches the bottom edge of its monitor and hides it `hide_delay_ms`
+/// (default 0.7 s) after the mouse left it. Polls the cursor every 60 ms, only while auto-hide is on (a mouse
+/// hook would run on every mouse move in every app).
 fn autohide_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
         let on = SHOWN.load(SeqCst) && settings::get().autohide;
@@ -379,12 +385,12 @@ fn autohide_loop(app: AppHandle) {
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
         let hold = HOLD.load(SeqCst) || preview::is_open();
         let settings = settings::get();
-        let fill = settings.fill;
+        let delay = Duration::from_millis(settings.hide_delay_ms as u64);
         let mut changes = Vec::new();
         for bar in bars(&app).iter_mut() {
             let m = bar.monitor;
             let inside = x >= m.left && x < m.right && y >= m.top && y < m.bottom;
-            let over = inside && y >= bar.layout(fill).0.top;
+            let over = inside && y >= bar.layout(&settings).0.top;
             if bar.concealed {
                 if inside && y >= m.bottom - 2 && !bar.fullscreen {
                     (bar.concealed, bar.left_at) = (false, None);
@@ -392,7 +398,7 @@ fn autohide_loop(app: AppHandle) {
                 }
             } else if over || hold || bar.fullscreen {
                 bar.left_at = None;
-            } else if bar.left_at.get_or_insert_with(Instant::now).elapsed() > Duration::from_millis(700) {
+            } else if bar.left_at.get_or_insert_with(Instant::now).elapsed() > delay {
                 bar.concealed = true;
                 changes.push((bar.label.clone(), bar.window(&settings), m.bottom, false));
             }
@@ -422,11 +428,10 @@ fn tint_loop(app: AppHandle) {
                 continue;
             }
             was_on = true;
-            let fill = settings::get().fill;
             let targets: Vec<(String, RECT, RECT)> = bars(&app)
                 .iter()
                 .filter(|b| !b.concealed && !b.fullscreen)
-                .map(|b| (b.label.clone(), b.layout(fill).0, b.monitor))
+                .map(|b| (b.label.clone(), b.layout(&s).0, b.monitor))
                 .collect();
             for (label, strip, monitor) in targets {
                 let now = colors::app_floor(monitor, strip, 8);
@@ -511,7 +516,7 @@ fn watch_loop(app: AppHandle) {
                 on_main(&app, |h| place_bars(h, true));
             }
             let current = monitor_rects(&app);
-            let known: Vec<(RECT, i32)> = bars(&app).iter().map(|b| (b.monitor, b.height)).collect();
+            let known: Vec<(RECT, f64)> = bars(&app).iter().map(|b| (b.monitor, b.scale)).collect();
             if current != known {
                 on_main(&app, |h| {
                     rebuild_bars(h);
@@ -701,17 +706,30 @@ fn get_settings() -> settings::Settings {
     settings::get()
 }
 
+/// Sets one setting (a switch's bool, a slider's number, the size's name; checked and clamped in settings.rs)
+/// and applies it live.
 #[tauri::command]
-fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settings> {
-    let now = settings::set(&key, on)?;
+fn set_setting(app: AppHandle, key: String, value: serde_json::Value) -> Option<settings::Settings> {
+    let now = settings::set(&key, &value)?;
     let _ = app.emit("settings", &now);
-    if matches!(key.as_str(), "autohide" | "fill" | "blend") && SHOWN.load(SeqCst) {
+    if matches!(key.as_str(), "autohide" | "fill" | "blend" | "size") && SHOWN.load(SeqCst) {
         on_main(&app, |h| place_bars(h, true));
+    }
+    if key == "glass" {
+        let tint = now.tint();
+        on_main(&app, move |h| {
+            // Bars and open popups; the settings window has its own (Mica) backdrop.
+            for (label, window) in h.webview_windows() {
+                if let (true, Ok(hwnd)) = (label != SETTINGS, window.hwnd()) {
+                    win::set_glass(HWND(hwnd.0), tint);
+                }
+            }
+        });
     }
     if key == "all_monitors" {
         push_apps(&app);
     }
-    if key == "show_codex" && on {
+    if key == "show_codex" && now.show_codex {
         let h = app.clone();
         std::thread::spawn(move || fetch_codex(&h));
     }
@@ -763,7 +781,7 @@ fn popup(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
         .always_on_top(true)
         .visible(false)
         .build()?;
-    win::set_glass(HWND(popup.hwnd()?.0), GLASS_TINT);
+    win::set_glass(HWND(popup.hwnd()?.0), settings::get().tint());
     Ok(popup)
 }
 
@@ -833,12 +851,52 @@ async fn fit_menu(app: AppHandle, window: WebviewWindow, width: f64, height: f64
     window.set_focus()
 }
 
-/// Closes a popup (tray overflow or Pane menu).
+/// Closes a popup (tray overflow or Pane menu) or the settings window (Escape).
 #[tauri::command]
 fn close_popup(window: WebviewWindow) {
     HOLD.store(false, SeqCst);
     // Destroyed, not hidden: a hidden popup keeps its ~30 MB page alive. Reopening builds it again (~0.1 s).
     let _ = window.destroy();
+}
+
+const SETTINGS: &str = "settings";
+
+/// "More settings…": the settings window, a normal window with a title bar, centred on the monitor of the bar
+/// whose menu asked. One at a time (focused if already open); destroyed when closed, like the popups.
+#[tauri::command]
+async fn open_settings(app: AppHandle, window: WebviewWindow) -> tauri::Result<()> {
+    if let Some(open) = app.get_webview_window(SETTINGS) {
+        let _ = open.unminimize();
+        return open.set_focus();
+    }
+    let bar_label = window.label().strip_prefix("menu-").unwrap_or(window.label()).to_string();
+    let place = {
+        let bars = bars(&app);
+        bars.iter().find(|b| b.label == bar_label).or(bars.first()).map(|b| (b.monitor, b.scale))
+    };
+    let settings = WebviewWindowBuilder::new(&app, SETTINGS, WebviewUrl::App("index.html".into()))
+        .title("Pane settings")
+        .additional_browser_args(BROWSER_ARGS)
+        .transparent(true)
+        // Windows 11's own glass for normal windows; dark like the bar.
+        .effects(tauri::utils::config::WindowEffectsConfig {
+            effects: vec![tauri::window::Effect::Mica],
+            ..Default::default()
+        })
+        .theme(Some(tauri::Theme::Dark))
+        .min_inner_size(360.0, 320.0)
+        .visible(false)
+        .build()?;
+    if let Some((m, scale)) = place {
+        // 440 x 680 logical px, at most 90 % of the monitor.
+        let w = ((440.0 * scale) as i32).min((m.right - m.left) * 9 / 10);
+        let h = ((680.0 * scale) as i32).min((m.bottom - m.top) * 9 / 10);
+        // Position first: moving onto a monitor with another DPI rescales the window, the size then fixes it.
+        settings.set_position(PhysicalPosition::new(m.left + (m.right - m.left - w) / 2, m.top + (m.bottom - m.top - h) / 2))?;
+        settings.set_size(PhysicalSize::new(w as u32, h as u32))?;
+    }
+    settings.show()?;
+    settings.set_focus()
 }
 
 #[tauri::command]
@@ -943,6 +1001,7 @@ fn main() {
             open_claude_login,
             get_settings,
             set_setting,
+            open_settings,
             hold_bar
         ])
         .setup(|app| {
@@ -996,5 +1055,12 @@ mod tests {
         let (strip, bar) = layout(m, 48, 0, 0);
         assert_eq!((bar.left, bar.top, bar.right, bar.bottom), (0, 1392, 2560, 1440));
         assert_eq!((strip.top, strip.bottom), (bar.top, bar.bottom));
+    }
+
+    #[test]
+    fn slide_keeps_todays_steps() {
+        assert_eq!(slide_frames(120), 8); // the default: 8 frames x 15 ms, as before the setting
+        assert_eq!(slide_frames(0), 1);
+        assert_eq!(slide_frames(400), 27);
     }
 }
