@@ -16,7 +16,7 @@ import { once, replay } from "./anim";
 import { renderClaude, renderCodex, setClaudeLogo, claudeState, codexState, type ClaudeUsage, type CodexUsage } from "./claude";
 import { applyTint } from "./tint";
 
-type WinItem = { hwnd: number; title: string; active: boolean };
+type WinItem = { hwnd: number; title: string; active: boolean; badge: string; badge_tip: string; flashing: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
 type Item = MenuItemOptions | CheckMenuItemOptions | PredefinedMenuItemOptions | SubmenuOptions;
 type Settings = {
@@ -195,16 +195,30 @@ function barPage() {
 function updateAppButton(b: HTMLElement, app: AppItem) {
   b.classList.add("app");
   b.dataset.id = app.id;
-  b.title = app.windows.length === 1 ? app.windows[0].title : app.name;
-  b.setAttribute("aria-label", app.name);
+  // The app's badge (unread count / dot) from its first window that has one, like the Windows taskbar.
+  const badged = app.windows.find((w) => w.badge);
+  const tip = badged?.badge_tip ? ` (${badged.badge_tip})` : "";
+  b.title = (app.windows.length === 1 ? app.windows[0].title : app.name) + tip;
+  b.setAttribute("aria-label", app.name + tip);
   b.classList.toggle("running", app.windows.length > 0);
   b.classList.toggle("active", app.windows.some((w) => w.active));
-  const img = b.querySelector("img");
+  // Asks for attention (FlashWindowEx) until the window is brought to front.
+  const flashing = app.windows.some((w) => w.flashing);
+  if (flashing && !b.classList.contains("flashing")) once(b, "flash");
+  b.classList.toggle("flashing", flashing);
+  const img = b.querySelector<HTMLImageElement>("img.icon");
   if (app.icon && img?.src !== app.icon) {
-    b.replaceChildren(Object.assign(document.createElement("img"), { src: app.icon, alt: "" }));
+    b.replaceChildren(Object.assign(document.createElement("img"), { className: "icon", src: app.icon, alt: "" }));
   } else if (!app.icon) {
     b.textContent = app.name.slice(0, 1).toUpperCase();
   }
+  let badge = b.querySelector<HTMLImageElement>("img.badge");
+  if (badged && !badge) {
+    badge = b.appendChild(Object.assign(document.createElement("img"), { className: "badge", alt: "" }));
+    once(badge, "pop-in");
+  }
+  if (badged && badge!.src !== badged.badge) badge!.src = badged.badge;
+  if (!badged) badge?.remove();
   b.onclick = () => clickApp(app, b);
 }
 
