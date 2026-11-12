@@ -9,6 +9,7 @@ export type Settings = {
   autohide: boolean;
   fill: boolean;
   adaptive_color: boolean;
+  blend: boolean;
   show_media: boolean;
   show_claude: boolean;
   show_codex: boolean;
@@ -75,6 +76,7 @@ export async function menuPage() {
       flip("autohide", "Auto-hide the bar"),
       flip("fill", "Fill the screen edge"),
       flip("adaptive_color", "Match the colour of apps"),
+      flip("blend", "App colour under the bar"),
       "-",
       flip("show_media", "Show Now Playing"),
       flip("show_claude", "Show Claude usage"),

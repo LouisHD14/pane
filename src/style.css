@@ -54,6 +54,34 @@ body.fill {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
+/* "App colour under the bar": the window is the whole reserved strip. The tint layer (::before) becomes an
+   opaque floor in the colours of the app's bottom edge, and the bar floats on it as its own glass slab with
+   the floating margins (6 px sides and bottom, 2 px top; main.rs GAP / TOP_GAP). Until the first colours
+   arrive the floor is see-through, so it looks like the normal floating bar. */
+body.blend {
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+body.blend.tinted::before {
+  opacity: 1;
+}
+
+body.blend .bar {
+  margin: 2px 6px 0;
+  height: calc(100% - 8px);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.07) 40%, rgba(255, 255, 255, 0.04) 60%, rgba(255, 255, 255, 0.08)),
+    radial-gradient(120% 140% at 50% -40%, rgba(255, 255, 255, 0.12), transparent 60%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 2px 8px rgba(0, 0, 0, 0.28);
+}
+
 /* A soft light sweep across the glass when the bar appears. */
 body::after {
   content: "";
