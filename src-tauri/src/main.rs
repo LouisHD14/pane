@@ -206,8 +206,10 @@ fn rebuild_bars(app: &AppHandle) {
             }
             let _ = window.destroy();
         }
-        if let Some(popup) = app.get_webview_window(&format!("overflow-{label}")) {
-            let _ = popup.destroy();
+        for kind in ["overflow", "menu"] {
+            if let Some(popup) = app.get_webview_window(&format!("{kind}-{label}")) {
+                let _ = popup.destroy();
+            }
         }
     }
     if let Err(e) = create_bars(app) {
@@ -661,6 +663,24 @@ fn tray_click(id: String, kind: tray::Click, x: i32, y: i32) {
     tray::click(&id, kind, x, y);
 }
 
+/// A hidden glass popup (tray overflow, Pane menu) for a bar. It loads the same page, which tells itself
+/// apart by the label.
+fn popup(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    let popup = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .title("Pane")
+        .additional_browser_args(BROWSER_ARGS)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible(false)
+        .build()?;
+    win::set_glass(HWND(popup.hwnd()?.0), GLASS_TINT);
+    Ok(popup)
+}
+
 /// Opens the "hidden icons" popup above the arrow of the bar that asks. `client_x` is the arrow's
 /// centre in CSS pixels inside that bar.
 #[tauri::command]
@@ -668,21 +688,7 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
     let label = format!("overflow-{}", window.label());
     let popup = match app.get_webview_window(&label) {
         Some(popup) => popup,
-        None => {
-            let popup = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
-                .title("Pane")
-                .additional_browser_args(BROWSER_ARGS)
-                .decorations(false)
-                .transparent(true)
-                .shadow(false)
-                .resizable(false)
-                .skip_taskbar(true)
-                .always_on_top(true)
-                .visible(false)
-                .build()?;
-            win::set_glass(HWND(popup.hwnd()?.0), GLASS_TINT);
-            popup
-        }
+        None => popup(&app, &label)?,
     };
     // Grid of 40 px cells, 5 per row, 8 px padding (same as the CSS).
     let count = tray::list().iter().filter(|t| !t.promoted).count().max(1);
@@ -699,8 +705,44 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
     popup.set_focus()
 }
 
+/// Where the Pane menu opens: the right-click's x in CSS px inside its bar (one menu at a time).
+static MENU_X: Mutex<f64> = Mutex::new(0.0);
+
+/// Right-click on the bar: the Pane menu, an own popup so it stays open while settings are switched
+/// (a native menu always closes on a click). It shows itself once the page knows its size (`fit_menu`).
 #[tauri::command]
-fn close_overflow(window: WebviewWindow) {
+async fn open_menu(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
+    let label = format!("menu-{}", window.label());
+    // Normally gone already: it closes when it loses focus (and when it can't build itself, see main.ts).
+    if let Some(open) = app.get_webview_window(&label) {
+        return open.set_focus();
+    }
+    *MENU_X.lock().unwrap_or_else(|e| e.into_inner()) = client_x;
+    HOLD.store(true, SeqCst);
+    popup(&app, &label).map(|_| ())
+}
+
+/// The menu page measured itself (CSS px): put it above its bar at the right-click, inside the monitor.
+#[tauri::command]
+async fn fit_menu(app: AppHandle, window: WebviewWindow, width: f64, height: f64) -> tauri::Result<()> {
+    let Some(bar_label) = window.label().strip_prefix("menu-") else { return Ok(()) };
+    let Some(bar) = app.get_webview_window(bar_label) else { return Ok(()) };
+    let Some(monitor) = bars(&app).iter().find(|b| b.label == bar_label).map(|b| b.monitor) else { return Ok(()) };
+    let scale = bar.scale_factor()?;
+    let (w, h) = ((width * scale).round() as i32, (height * scale).round() as i32);
+    let at = bar.outer_position()?;
+    let client_x = *MENU_X.lock().unwrap_or_else(|e| e.into_inner());
+    let x = (at.x + (client_x * scale).round() as i32).min(monitor.right - w).max(monitor.left);
+    let y = at.y - h - (8.0 * scale).round() as i32;
+    window.set_size(PhysicalSize::new(w as u32, h as u32))?;
+    window.set_position(PhysicalPosition::new(x, y))?;
+    window.show()?;
+    window.set_focus()
+}
+
+/// Closes a popup (tray overflow or Pane menu).
+#[tauri::command]
+fn close_popup(window: WebviewWindow) {
     HOLD.store(false, SeqCst);
     // Destroyed, not hidden: a hidden popup keeps its ~30 MB page alive. Reopening builds it again (~0.1 s).
     let _ = window.destroy();
@@ -790,7 +832,9 @@ fn main() {
             get_tray,
             tray_click,
             open_overflow,
-            close_overflow,
+            open_menu,
+            fit_menu,
+            close_popup,
             autostart,
             set_autostart,
             check_update,
