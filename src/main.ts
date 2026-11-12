@@ -75,8 +75,8 @@ function previewPage() {
       }),
     );
   };
-  me.listen<Preview>("preview", (e) => show(e.payload));
-  invoke<Preview | null>("get_preview").then(show);
+  // Listen first: Rust may send the layout right after get_preview answered "nothing yet".
+  me.listen<Preview>("preview", (e) => show(e.payload)).then(() => invoke<Preview | null>("get_preview").then(show));
   document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("hide_preview"));
 }
 
@@ -263,8 +263,10 @@ function updateAppButton(b: HTMLElement, app: AppItem) {
   b.classList.toggle("active", app.windows.some((w) => w.active));
   // Asks for attention (FlashWindowEx) until the window is brought to front.
   const flashing = app.windows.some((w) => w.flashing);
-  if (flashing && !b.classList.contains("flashing")) once(b, "flash");
+  // replay, not once: the badge's pop-in ending (animationend bubbles) would cut the pulses short.
+  if (flashing && !b.classList.contains("flashing")) replay(b, "flash");
   b.classList.toggle("flashing", flashing);
+  if (!flashing) b.classList.remove("flash");
   const img = b.querySelector<HTMLImageElement>("img.icon");
   if (app.icon && img?.src !== app.icon) {
     b.replaceChildren(Object.assign(document.createElement("img"), { className: "icon", src: app.icon, alt: "" }));
