@@ -772,11 +772,14 @@ async fn fit_menu(app: AppHandle, window: WebviewWindow, width: f64, height: f64
         return Ok(());
     };
     let scale = bar.scale_factor()?;
-    let (w, h) = ((width * scale).round() as i32, (height * scale).round() as i32);
     let at = bar.outer_position()?;
+    let gap = (8.0 * scale).round() as i32;
+    // Never taller than the space above the bar: the list scrolls instead of running off the screen.
+    let room = at.y - gap - monitor.top - gap;
+    let (w, h) = ((width * scale).round() as i32, ((height * scale).round() as i32).min(room));
     let client_x = *MENU_X.lock().unwrap_or_else(|e| e.into_inner());
     let x = (at.x + (client_x * scale).round() as i32).min(monitor.right - w).max(monitor.left);
-    let y = at.y - h - (8.0 * scale).round() as i32;
+    let y = at.y - h - gap;
     window.set_size(PhysicalSize::new(w as u32, h as u32))?;
     window.set_position(PhysicalPosition::new(x, y))?;
     window.show()?;
