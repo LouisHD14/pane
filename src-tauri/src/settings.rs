@@ -15,6 +15,9 @@ pub struct Settings {
     pub fill: bool,
     /// Tint the glass with the colours of the apps just above the bar.
     pub adaptive_color: bool,
+    /// Paint the strip around the floating bar in the colours of the app's bottom edge, so the bar
+    /// seems to sit on the app instead of on the wallpaper. No effect with `fill` (no strip around it).
+    pub blend: bool,
     pub show_media: bool,
     pub show_claude: bool,
     pub show_codex: bool,
@@ -28,6 +31,7 @@ impl Default for Settings {
             autohide: false,
             fill: false,
             adaptive_color: false,
+            blend: false,
             show_media: true,
             show_claude: true,
             show_codex: true,
@@ -57,6 +61,7 @@ pub fn set(key: &str, on: bool) -> Option<Settings> {
         "autohide" => &mut s.autohide,
         "fill" => &mut s.fill,
         "adaptive_color" => &mut s.adaptive_color,
+        "blend" => &mut s.blend,
         "show_media" => &mut s.show_media,
         "show_claude" => &mut s.show_claude,
         "show_codex" => &mut s.show_codex,
@@ -81,6 +86,6 @@ mod tests {
     #[test]
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
-        assert!(s.autohide && s.show_media && !s.adaptive_color);
+        assert!(s.autohide && s.show_media && !s.adaptive_color && !s.blend);
     }
 }

@@ -22,7 +22,8 @@ function applySettings(s: Settings) {
   settings = s;
   for (const w of WIDGETS) document.body.classList.toggle(`no-${w}`, !s[`show_${w}`]);
   document.body.classList.toggle("fill", s.fill);
-  if (!s.adaptive_color) applyTint(null);
+  document.body.classList.toggle("blend", s.blend && !s.fill);
+  if (!s.adaptive_color && !s.blend) applyTint(null);
 }
 
 const me = getCurrentWebviewWindow();
@@ -189,7 +190,7 @@ function barPage() {
   // --- Settings (right-click menu) and the adaptive colour of the apps above the bar.
   invoke<Settings>("get_settings").then(applySettings);
   me.listen<Settings>("settings", (e) => applySettings(e.payload));
-  me.listen<[number, number, number][] | null>("tint", (e) => applyTint(settings?.adaptive_color ? e.payload : null));
+  me.listen<[number, number, number][] | null>("tint", (e) => applyTint(settings?.adaptive_color || settings?.blend ? e.payload : null));
 
   // --- Weather under the time; a click opens the Windows Widgets board with the full forecast.
   invoke<Weather | null>("get_weather").then((w) => renderWeather($("weather"), w));

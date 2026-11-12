@@ -138,7 +138,10 @@ fn place_bars(app: &AppHandle, show: bool) {
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            let (strip, rc) = bar.layout(settings.fill);
+            let (strip, bar_rc) = bar.layout(settings.fill);
+            // "App colour under the bar": the window is the whole strip; the page paints the strip in the app's
+            // colours and draws the floating bar inside it with the same margins.
+            let rc = if settings.blend && !settings.fill { strip } else { bar_rc };
             if settings.autohide {
                 // Floats over the apps: nothing is reserved, the bar takes the same place as otherwise.
                 win::release_edge(hwnd);
@@ -366,7 +369,8 @@ fn tint_loop(app: AppHandle) {
         let mut was_on = false;
         loop {
             std::thread::sleep(Duration::from_millis(750));
-            let on = SHOWN.load(SeqCst) && settings::get().adaptive_color;
+            let s = settings::get();
+            let on = SHOWN.load(SeqCst) && (s.adaptive_color || s.blend);
             if !on {
                 if was_on {
                     let _ = app.emit("tint", None::<Vec<[u8; 3]>>);
@@ -661,7 +665,7 @@ fn get_settings() -> settings::Settings {
 fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settings> {
     let now = settings::set(&key, on)?;
     let _ = app.emit("settings", &now);
-    if (key == "autohide" || key == "fill") && SHOWN.load(SeqCst) {
+    if matches!(key.as_str(), "autohide" | "fill" | "blend") && SHOWN.load(SeqCst) {
         on_main(&app, |h| place_bars(h, true));
     }
     if key == "show_codex" && on {
