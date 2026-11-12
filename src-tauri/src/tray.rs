@@ -323,8 +323,16 @@ fn run(ready: Sender<isize>) {
         // shortcut: polls the z-order every 200 ms like ManagedShell (100 ms); an icon added in that gap reaches only
         // Explorer until the next TaskbarCreated. Upgrade if icons go missing.
         SetTimer(Some(hwnd), TIMER_TOPMOST, 200, None);
+        // ITaskbarList (app badges) goes to the window named here on the first Shell_TrayWnd (see apps.rs).
+        let band = apps::taskband();
+        if band != 0 {
+            let _ = SetPropW(hwnd, w!("TaskbandHWND"), Some(HANDLE(band as _)));
+        }
         let _ = ready.send(hwnd.0 as isize);
         taskbar_created();
+        if band != 0 {
+            apps::announce();
+        }
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             DispatchMessageW(&msg);
@@ -383,6 +391,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             }
             WM_CLOSE => LRESULT(0), // only stop() closes it
             WM_DESTROY => {
+                let _ = RemovePropW(hwnd, w!("TaskbandHWND"));
                 PostQuitMessage(0);
                 LRESULT(0)
             }
@@ -462,7 +471,7 @@ fn owner_exe(hwnd: isize) -> String {
 
 /// The icon as a PNG data URL at its own size (the app picks it for the tray's DPI), "" if unreadable.
 // shortcut: monochrome icons (no color bitmap) give ""; no tray app seen uses them.
-fn icon_png(hicon: isize) -> String {
+pub(crate) fn icon_png(hicon: isize) -> String {
     unsafe {
         let mut ii = ICONINFO::default();
         if GetIconInfo(HICON(hicon as _), &mut ii).is_err() {

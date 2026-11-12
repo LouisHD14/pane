@@ -6,6 +6,7 @@ mod claude;
 mod codex;
 mod http;
 mod media;
+mod preview;
 mod settings;
 mod status;
 mod tray;
@@ -27,8 +28,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ES
 
 /// Bar height in logical pixels, the same as the Windows 11 taskbar.
 const BAR_HEIGHT: f64 = 48.0;
-/// The bar floats this far (logical px) from the screen edges and from maximized windows above it.
+/// The floating bar keeps this far (logical px) from the screen edges...
 const GAP: f64 = 6.0;
+/// ...and this far from maximized windows above it.
+const TOP_GAP: f64 = 2.0;
 /// WebView2 start options for every Pane window (all windows must use the same ones). Tauri's own
 /// defaults plus: one renderer process for all bars and the popup instead of one each (~30 MB each).
 const BROWSER_ARGS: &str =
@@ -58,8 +61,18 @@ struct Bars(Mutex<Vec<Bar>>);
 /// Auto-hide: keeps the bar up while its menu or the hidden-icons popup is open.
 static HOLD: AtomicBool = AtomicBool::new(false);
 
-fn gap_of(bar: &Bar) -> i32 {
-    (bar.height as f64 * GAP / BAR_HEIGHT).round() as i32
+impl Bar {
+    /// (strip reserved at the bottom of the monitor, the bar window's rect) in physical px.
+    fn layout(&self, fill: bool) -> (RECT, RECT) {
+        let px = |logical: f64| (self.height as f64 * logical / BAR_HEIGHT).round() as i32;
+        layout(self.monitor, self.height, if fill { 0 } else { px(GAP) }, if fill { 0 } else { px(TOP_GAP) })
+    }
+}
+
+/// The bar `gap` px from the bottom and the sides; the reserved strip ends `top_gap` px above it.
+fn layout(m: RECT, height: i32, gap: i32, top_gap: i32) -> (RECT, RECT) {
+    let bar = RECT { left: m.left + gap, top: m.bottom - gap - height, right: m.right - gap, bottom: m.bottom - gap };
+    (RECT { top: bar.top - top_gap, ..m }, bar)
 }
 
 fn bars(app: &AppHandle) -> MutexGuard<'_, Vec<Bar>> {
@@ -90,6 +103,7 @@ fn set_shown(app: &AppHandle, show: bool) {
             });
         });
     } else {
+        preview::hide();
         tray::stop();
         place_bars(app, false);
         win::restore_taskbar(&dir);
@@ -118,23 +132,23 @@ fn request(app: &AppHandle, show: impl FnOnce(bool) -> bool + Send + 'static) {
 
 /// Main thread only.
 fn place_bars(app: &AppHandle, show: bool) {
-    let autohide = settings::get().autohide;
+    let settings = settings::get();
     for bar in bars(app).iter_mut() {
         let Some(window) = app.get_webview_window(&bar.label) else { continue };
         let Ok(hwnd) = window.hwnd() else { continue };
         let hwnd = HWND(hwnd.0);
         if show {
-            let gap = gap_of(bar);
-            let rc = if autohide {
+            let (strip, rc) = bar.layout(settings.fill);
+            if settings.autohide {
                 // Floats over the apps: nothing is reserved, the bar takes the same place as otherwise.
                 win::release_edge(hwnd);
-                RECT { top: bar.monitor.bottom - bar.height - 2 * gap, ..bar.monitor }
             } else {
-                // Reserve bar + a gap above and below, then float the bar inside with the gap on all sides.
-                win::reserve_edge(hwnd, bar.monitor, bar.height + 2 * gap)
-            };
-            let _ = window.set_position(PhysicalPosition::new(rc.left + gap, rc.top + gap));
-            let _ = window.set_size(PhysicalSize::new((rc.right - rc.left - 2 * gap) as u32, bar.height as u32));
+                win::reserve_edge(hwnd, strip);
+            }
+            win::set_round(hwnd, !settings.fill);
+            win::pin(hwnd, Some(rc));
+            let _ = window.set_position(PhysicalPosition::new(rc.left, rc.top));
+            let _ = window.set_size(PhysicalSize::new((rc.right - rc.left) as u32, (rc.bottom - rc.top) as u32));
             // Auto-hide starts shown; the cursor loop hides it once the mouse is elsewhere.
             (bar.concealed, bar.left_at) = (false, None);
             if !bar.fullscreen {
@@ -187,16 +201,22 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
 
 /// Monitors were plugged in/out or changed resolution: replace all bars. Main thread only.
 fn rebuild_bars(app: &AppHandle) {
+    preview::hide();
     let old: Vec<String> = bars(app).iter().map(|b| b.label.clone()).collect();
     for label in old {
         if let Some(window) = app.get_webview_window(&label) {
             if let Ok(hwnd) = window.hwnd() {
                 win::release_edge(HWND(hwnd.0));
+                win::pin(HWND(hwnd.0), None);
             }
             let _ = window.destroy();
         }
-        if let Some(popup) = app.get_webview_window(&format!("overflow-{label}")) {
-            let _ = popup.destroy();
+        for kind in ["overflow", "menu"] {
+            if let Some(popup) = app.get_webview_window(&format!("{kind}-{label}")) {
+                // Its page can't call close_popup any more, so let the bar auto-hide again here.
+                HOLD.store(false, SeqCst);
+                let _ = popup.destroy();
+            }
         }
     }
     if let Err(e) = create_bars(app) {
@@ -250,6 +270,7 @@ fn push_apps(app: &AppHandle) {
         let now = apps::list(monitor);
         if last.get(&label) != Some(&now) {
             let _ = app.emit_to(label.as_str(), "apps", &now);
+            preview::apps_changed(&label, &now);
             last.insert(label, now);
         }
     }
@@ -300,12 +321,13 @@ fn autohide_loop(app: AppHandle) {
         let on = SHOWN.load(SeqCst) && settings::get().autohide;
         std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
-        let hold = HOLD.load(SeqCst);
+        let hold = HOLD.load(SeqCst) || preview::is_open();
+        let fill = settings::get().fill;
         let mut changes = Vec::new();
         for bar in bars(&app).iter_mut() {
             let m = bar.monitor;
             let inside = x >= m.left && x < m.right && y >= m.top && y < m.bottom;
-            let over = inside && y >= m.bottom - bar.height - 2 * gap_of(bar);
+            let over = inside && y >= bar.layout(fill).0.top;
             if bar.concealed {
                 if inside && y >= m.bottom - 2 && !bar.fullscreen {
                     (bar.concealed, bar.left_at) = (false, None);
@@ -354,12 +376,14 @@ fn tint_loop(app: AppHandle) {
                 continue;
             }
             was_on = true;
-            let targets: Vec<(String, i32)> =
-                bars(&app).iter().filter(|b| !b.concealed && !b.fullscreen).map(|b| (b.label.clone(), gap_of(b))).collect();
-            for (label, gap) in targets {
+            let fill = settings::get().fill;
+            // Just above the reserved strip, so the bar itself isn't read.
+            let targets: Vec<(String, RECT)> =
+                bars(&app).iter().filter(|b| !b.concealed && !b.fullscreen).map(|b| (b.label.clone(), b.layout(fill).0)).collect();
+            for (label, strip) in targets {
                 let rect = app.get_webview_window(&label).and_then(|w| w.hwnd().ok()).and_then(|h| win::window_rect(HWND(h.0)));
                 let Some(rc) = rect else { continue };
-                let Some(colors) = win::screen_colors(rc.left, rc.right, rc.top - gap, 8) else { continue };
+                let Some(colors) = win::screen_colors(rc.left, rc.right, strip.top, 8) else { continue };
                 // Rounded to steps of 8, so a blinking cursor or a video doesn't resend it every time.
                 let colors: Vec<[u8; 3]> = colors.into_iter().map(|c| c.map(|v| v & 0xF8)).collect();
                 if last.get(&label) != Some(&colors) {
@@ -518,6 +542,37 @@ fn close_window(hwnd: isize) {
     apps::close(hwnd);
 }
 
+/// Hover preview of an app's windows above its icon; `left`/`right` are the icon's edges in CSS px in the bar.
+#[tauri::command]
+async fn show_preview(app: AppHandle, window: WebviewWindow, id: String, left: f64, right: f64) {
+    let Some(monitor) = bars(&app).iter().find(|b| b.label == window.label()).map(|b| b.monitor) else { return };
+    let item = LAST_APPS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|all| {
+        all.get(window.label()).and_then(|list| list.iter().find(|a| a.id == id).cloned())
+    });
+    if let Some(item) = item {
+        preview::show(window, monitor, item, left, right);
+    }
+}
+
+// Async (not on the main thread) like every preview call, so they never wait on it.
+#[tauri::command]
+async fn hide_preview() {
+    preview::hide();
+}
+
+/// The preview page asks what to show once it has loaded.
+#[tauri::command]
+async fn get_preview(window: WebviewWindow) -> Option<preview::Preview> {
+    preview::ready(window.label())
+}
+
+/// A click on a preview: that window to the front (never minimizes, unlike a click on the icon).
+#[tauri::command]
+fn focus_window(hwnd: isize) {
+    apps::bring_to_front(hwnd);
+    preview::hide();
+}
+
 #[tauri::command]
 async fn launch(id: String) {
     apps::launch(&id);
@@ -606,7 +661,7 @@ fn get_settings() -> settings::Settings {
 fn set_setting(app: AppHandle, key: String, on: bool) -> Option<settings::Settings> {
     let now = settings::set(&key, on)?;
     let _ = app.emit("settings", &now);
-    if key == "autohide" && SHOWN.load(SeqCst) {
+    if (key == "autohide" || key == "fill") && SHOWN.load(SeqCst) {
         on_main(&app, |h| place_bars(h, true));
     }
     if key == "show_codex" && on {
@@ -647,6 +702,24 @@ fn tray_click(id: String, kind: tray::Click, x: i32, y: i32) {
     tray::click(&id, kind, x, y);
 }
 
+/// A hidden glass popup (tray overflow, Pane menu) for a bar. It loads the same page, which tells itself
+/// apart by the label.
+fn popup(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    let popup = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .title("Pane")
+        .additional_browser_args(BROWSER_ARGS)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible(false)
+        .build()?;
+    win::set_glass(HWND(popup.hwnd()?.0), GLASS_TINT);
+    Ok(popup)
+}
+
 /// Opens the "hidden icons" popup above the arrow of the bar that asks. `client_x` is the arrow's
 /// centre in CSS pixels inside that bar.
 #[tauri::command]
@@ -654,21 +727,7 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
     let label = format!("overflow-{}", window.label());
     let popup = match app.get_webview_window(&label) {
         Some(popup) => popup,
-        None => {
-            let popup = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
-                .title("Pane")
-                .additional_browser_args(BROWSER_ARGS)
-                .decorations(false)
-                .transparent(true)
-                .shadow(false)
-                .resizable(false)
-                .skip_taskbar(true)
-                .always_on_top(true)
-                .visible(false)
-                .build()?;
-            win::set_glass(HWND(popup.hwnd()?.0), GLASS_TINT);
-            popup
-        }
+        None => popup(&app, &label)?,
     };
     // Grid of 40 px cells, 5 per row, 8 px padding (same as the CSS).
     let count = tray::list().iter().filter(|t| !t.promoted).count().max(1);
@@ -685,8 +744,51 @@ async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> 
     popup.set_focus()
 }
 
+/// Where the Pane menu opens: the right-click's x in CSS px inside its bar (one menu at a time).
+static MENU_X: Mutex<f64> = Mutex::new(0.0);
+
+/// Right-click on the bar: the Pane menu, an own popup so it stays open while settings are switched
+/// (a native menu always closes on a click). It shows itself once the page knows its size (`fit_menu`).
 #[tauri::command]
-fn close_overflow(window: WebviewWindow) {
+async fn open_menu(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
+    let label = format!("menu-{}", window.label());
+    // Normally gone already: it closes when it loses focus (and when it can't build itself, see main.ts).
+    if let Some(open) = app.get_webview_window(&label) {
+        return open.set_focus();
+    }
+    *MENU_X.lock().unwrap_or_else(|e| e.into_inner()) = client_x;
+    HOLD.store(true, SeqCst);
+    popup(&app, &label).map(|_| ()).inspect_err(|_| HOLD.store(false, SeqCst))
+}
+
+/// The menu page measured itself (CSS px): put it above its bar at the right-click, inside the monitor.
+#[tauri::command]
+async fn fit_menu(app: AppHandle, window: WebviewWindow, width: f64, height: f64) -> tauri::Result<()> {
+    let Some(bar_label) = window.label().strip_prefix("menu-") else { return Ok(()) };
+    let monitor = bars(&app).iter().find(|b| b.label == bar_label).map(|b| b.monitor);
+    // Its bar is gone (monitors changed): close, so a hidden menu doesn't keep holding the bar up.
+    let (Some(bar), Some(monitor)) = (app.get_webview_window(bar_label), monitor) else {
+        close_popup(window);
+        return Ok(());
+    };
+    let scale = bar.scale_factor()?;
+    let at = bar.outer_position()?;
+    let gap = (8.0 * scale).round() as i32;
+    // Never taller than the space above the bar: the list scrolls instead of running off the screen.
+    let room = at.y - gap - monitor.top - gap;
+    let (w, h) = ((width * scale).round() as i32, ((height * scale).round() as i32).min(room));
+    let client_x = *MENU_X.lock().unwrap_or_else(|e| e.into_inner());
+    let x = (at.x + (client_x * scale).round() as i32).min(monitor.right - w).max(monitor.left);
+    let y = at.y - h - gap;
+    window.set_size(PhysicalSize::new(w as u32, h as u32))?;
+    window.set_position(PhysicalPosition::new(x, y))?;
+    window.show()?;
+    window.set_focus()
+}
+
+/// Closes a popup (tray overflow or Pane menu).
+#[tauri::command]
+fn close_popup(window: WebviewWindow) {
     HOLD.store(false, SeqCst);
     // Destroyed, not hidden: a hidden popup keeps its ~30 MB page alive. Reopening builds it again (~0.1 s).
     let _ = window.destroy();
@@ -763,6 +865,10 @@ fn main() {
             get_status,
             activate,
             close_window,
+            show_preview,
+            hide_preview,
+            get_preview,
+            focus_window,
             launch,
             get_media,
             media_control,
@@ -776,7 +882,9 @@ fn main() {
             get_tray,
             tray_click,
             open_overflow,
-            close_overflow,
+            open_menu,
+            fit_menu,
+            close_popup,
             autostart,
             set_autostart,
             check_update,
@@ -794,6 +902,13 @@ fn main() {
             let handle = app.handle().clone();
             create_bars(&handle)?;
             start_watchdog();
+            preview::start(handle.clone());
+            // Before showing: the tray window points app badges at the window this creates.
+            let h = handle.clone();
+            apps::watch(move || {
+                push_apps(&h);
+                check_fullscreen(&h);
+            });
             set_shown(&handle, true);
             watch_loop(handle.clone());
             status_loop(handle.clone());
@@ -808,11 +923,6 @@ fn main() {
             media::watch(move || {
                 let _ = m.emit("media", media::current());
             });
-            let h = handle.clone();
-            apps::watch(move || {
-                push_apps(&h);
-                check_fullscreen(&h);
-            });
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -822,4 +932,22 @@ fn main() {
                 set_shown(app, false);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserved_strip_matches_the_drawn_bar() {
+        let m = RECT { left: 0, top: 0, right: 2560, bottom: 1440 };
+        // Floating: 6 px from the edges, the reserved strip ends 2 px above the bar.
+        let (strip, bar) = layout(m, 48, 6, 2);
+        assert_eq!((bar.left, bar.top, bar.right, bar.bottom), (6, 1386, 2554, 1434));
+        assert_eq!((strip.left, strip.top, strip.right, strip.bottom), (0, 1384, 2560, 1440));
+        // Fill: the bar is exactly the reserved strip.
+        let (strip, bar) = layout(m, 48, 0, 0);
+        assert_eq!((bar.left, bar.top, bar.right, bar.bottom), (0, 1392, 2560, 1440));
+        assert_eq!((strip.top, strip.bottom), (bar.top, bar.bottom));
+    }
 }

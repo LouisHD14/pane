@@ -1,11 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
-  Menu,
-  type MenuItemOptions,
-  type CheckMenuItemOptions,
-  type PredefinedMenuItemOptions,
-  type SubmenuOptions,
-} from "@tauri-apps/api/menu";
+import { Menu, type MenuItemOptions, type PredefinedMenuItemOptions } from "@tauri-apps/api/menu";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
@@ -13,21 +7,13 @@ import { mountMedia, renderMedia, type NowPlaying } from "./media";
 import { renderWeather, type Weather } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
-import { renderClaude, renderCodex, setClaudeLogo, claudeState, codexState, type ClaudeUsage, type CodexUsage } from "./claude";
+import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
 import { applyTint } from "./tint";
+import { menuPage, type Settings } from "./menu";
 
-type WinItem = { hwnd: number; title: string; active: boolean };
+type WinItem = { hwnd: number; title: string; active: boolean; badge: string; badge_tip: string; flashing: boolean };
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
-type Item = MenuItemOptions | CheckMenuItemOptions | PredefinedMenuItemOptions | SubmenuOptions;
-type Settings = {
-  autohide: boolean;
-  adaptive_color: boolean;
-  show_media: boolean;
-  show_claude: boolean;
-  show_codex: boolean;
-  show_usage: boolean;
-  show_weather: boolean;
-};
+type Item = MenuItemOptions | PredefinedMenuItemOptions;
 
 /** Widget switches hide their widget with a class on <body> (the widget keeps updating, it's just not shown). */
 const WIDGETS = ["media", "claude", "codex", "usage", "weather"] as const;
@@ -35,15 +21,52 @@ let settings: Settings | null = null;
 function applySettings(s: Settings) {
   settings = s;
   for (const w of WIDGETS) document.body.classList.toggle(`no-${w}`, !s[`show_${w}`]);
+  document.body.classList.toggle("fill", s.fill);
   if (!s.adaptive_color) applyTint(null);
 }
 
 const me = getCurrentWebviewWindow();
 const $ = (id: string) => document.getElementById(id)!;
 
-// The "hidden icons" popup loads the same page; its window label tells it apart from a bar.
+// The popups ("hidden icons", Pane menu, window preview) load the same page; the window label tells them apart from a bar.
 if (me.label.startsWith("overflow-")) overflowPage();
+else if (me.label.startsWith("menu-")) menuPage();
+else if (me.label.startsWith("preview-")) previewPage();
 else barPage();
+
+type Card = { hwnd: number; title: string; active: boolean; rect: number[]; body: number[]; live: boolean };
+type Preview = { icon: string; cards: Card[] };
+
+/** Window previews above an app icon. Rust lays out the cards and DWM draws the live images into each `body`. */
+function previewPage() {
+  document.body.classList.add("preview");
+  const px = (el: HTMLElement, [x, y, w, h]: number[]) =>
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+  const show = (p: Preview | null) => {
+    if (!p) return;
+    document.body.replaceChildren(
+      ...p.cards.map((c) => {
+        const card = Object.assign(document.createElement("button"), { className: "card", title: c.title });
+        card.classList.toggle("active", c.active);
+        card.setAttribute("aria-label", `Switch to ${c.title}`);
+        const title = Object.assign(document.createElement("span"), { className: "card-title", textContent: c.title });
+        // Height of the title row = where the image starts.
+        Object.assign(title.style, { height: `${c.body[1]}px`, lineHeight: `${c.body[1]}px` });
+        const body = document.createElement("div");
+        body.className = c.live ? "card-body" : "card-body minimized";
+        px(body, c.body);
+        if (!c.live && p.icon) body.append(Object.assign(document.createElement("img"), { src: p.icon, alt: "" }));
+        card.append(title, body);
+        px(card, c.rect);
+        card.onclick = () => invoke("focus_window", { hwnd: c.hwnd });
+        return card;
+      }),
+    );
+  };
+  // Listen first: Rust may send the layout right after get_preview answered "nothing yet".
+  me.listen<Preview>("preview", (e) => show(e.payload)).then(() => invoke<Preview | null>("get_preview").then(show));
+  document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("hide_preview"));
+}
 
 /** Popup above the ^ arrow with the tray icons that aren't promoted to the bar. */
 function overflowPage() {
@@ -58,8 +81,8 @@ function overflowPage() {
   me.listen<TrayIcon[]>("tray", (e) => show(e.payload));
   window.addEventListener("focus", () => replay(document.body, "open"));
   // Close like a Windows flyout: when focus goes elsewhere (also when an app opens its tray menu).
-  window.addEventListener("blur", () => invoke("close_overflow"));
-  document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("close_overflow"));
+  window.addEventListener("blur", () => invoke("close_popup"));
+  document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("close_popup"));
 }
 
 function barPage() {
@@ -98,6 +121,8 @@ function barPage() {
       const b = old.get(app.id) ?? document.createElement("button");
       if (!old.delete(app.id) && !firstPaint) once(b, "enter");
       updateAppButton(b, app);
+      b.onmouseenter = () => hoverApp(b);
+      b.onmouseleave = () => clearTimeout(hoverTimer);
       return b;
     });
     // Closed apps shrink away at their old spot, then go.
@@ -111,6 +136,27 @@ function barPage() {
   };
   invoke<AppItem[]>("get_apps").then(renderApps);
   me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
+
+  // --- Live preview after a short hover on a running app; quicker when one is already open (moving along the
+  // icons). Rust closes it once the mouse has left icon and popup for a moment.
+  let hoverTimer = 0;
+  let previewOpen = false;
+  const hoverApp = (b: HTMLElement) => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      const app = apps.find((a) => a.id === b.dataset.id);
+      if (!app?.windows.length || !b.matches(":hover")) return;
+      const r = b.getBoundingClientRect();
+      previewOpen = true;
+      invoke("show_preview", { id: app.id, left: r.left, right: r.right });
+    }, previewOpen ? 120 : 400);
+  };
+  me.listen("preview-closed", () => (previewOpen = false));
+  const closePreview = () => {
+    clearTimeout(hoverTimer);
+    if (previewOpen) invoke("hide_preview");
+  };
+  $("apps").addEventListener("click", closePreview);
 
   // --- Tray: promoted icons on the bar, the rest behind the ^ arrow.
   const showTray = (icons: TrayIcon[]) => {
@@ -175,12 +221,14 @@ function barPage() {
     await invoke("install_update").catch(() => (pill.textContent = text));
   });
 
-  // --- Right-click: app menu on an app icon, Pane menu everywhere else (tray icons handle their own).
+  // --- Right-click: app menu on an app icon, Pane menu (own popup, menu.ts) everywhere else (tray icons handle their own).
   document.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
+    closePreview();
     const id = (e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);
-    const menu = await Menu.new({ items: app ? appMenu(app) : await paneMenu() });
+    if (!app) return invoke("open_menu", { clientX: e.clientX });
+    const menu = await Menu.new({ items: appMenu(app) });
     // Auto-hide must not slide the bar away while its menu is open.
     await invoke("hold_bar", { on: true });
     try {
@@ -195,16 +243,32 @@ function barPage() {
 function updateAppButton(b: HTMLElement, app: AppItem) {
   b.classList.add("app");
   b.dataset.id = app.id;
-  b.title = app.windows.length === 1 ? app.windows[0].title : app.name;
-  b.setAttribute("aria-label", app.name);
+  // The app's badge (unread count / dot) from its first window that has one, like the Windows taskbar.
+  const badged = app.windows.find((w) => w.badge);
+  const tip = badged?.badge_tip ? ` (${badged.badge_tip})` : "";
+  b.title = (app.windows.length === 1 ? app.windows[0].title : app.name) + tip;
+  b.setAttribute("aria-label", app.name + tip);
   b.classList.toggle("running", app.windows.length > 0);
   b.classList.toggle("active", app.windows.some((w) => w.active));
-  const img = b.querySelector("img");
+  // Asks for attention (FlashWindowEx) until the window is brought to front.
+  const flashing = app.windows.some((w) => w.flashing);
+  // replay, not once: the badge's pop-in ending (animationend bubbles) would cut the pulses short.
+  if (flashing && !b.classList.contains("flashing")) replay(b, "flash");
+  b.classList.toggle("flashing", flashing);
+  if (!flashing) b.classList.remove("flash");
+  const img = b.querySelector<HTMLImageElement>("img.icon");
   if (app.icon && img?.src !== app.icon) {
-    b.replaceChildren(Object.assign(document.createElement("img"), { src: app.icon, alt: "" }));
+    b.replaceChildren(Object.assign(document.createElement("img"), { className: "icon", src: app.icon, alt: "" }));
   } else if (!app.icon) {
     b.textContent = app.name.slice(0, 1).toUpperCase();
   }
+  let badge = b.querySelector<HTMLImageElement>("img.badge");
+  if (badged && !badge) {
+    badge = b.appendChild(Object.assign(document.createElement("img"), { className: "badge", alt: "" }));
+    once(badge, "pop-in");
+  }
+  if (badged && badge!.src !== badged.badge) badge!.src = badged.badge;
+  if (!badged) badge?.remove();
   b.onclick = () => clickApp(app, b);
 }
 
@@ -240,54 +304,4 @@ function showUpdate(version: string, notes: string) {
     pill.hidden = false;
     once(pill, "pop-in");
   }
-}
-
-/** When the last manual check found nothing; the menu says "Up to date" for a minute after. */
-let upToDateAt = 0;
-
-async function paneMenu(): Promise<Item[]> {
-  const auto = await invoke<boolean>("autostart");
-  const upToDate = Date.now() - upToDateAt < 60_000;
-  const check = async () => {
-    // A found update arrives as the "update" event and shows the pill.
-    if (!(await invoke<string | null>("check_update"))) upToDateAt = Date.now();
-  };
-  const s = settings ?? (await invoke<Settings>("get_settings"));
-  const flip = (key: keyof Settings, text: string): CheckMenuItemOptions => ({
-    text,
-    checked: s[key],
-    action: () => invoke("set_setting", { key, on: !s[key] }),
-  });
-  const codexIn = await invoke<boolean>("codex_logged_in");
-  const claude = claudeState();
-  const codex = codexState();
-  const logins: Item[] = [
-    {
-      text: codexIn ? (codex?.source === "error" ? "Log in to Codex again…" : "Codex: switch account…") : "Add Codex login…",
-      action: () => invoke("open_codex_login"),
-    },
-  ];
-  if (claude?.source === "local") logins.unshift({ text: "Log in to Claude Code again…", action: () => invoke("open_claude_login") });
-  return [
-    {
-      text: "Settings",
-      items: [
-        flip("autohide", "Auto-hide the bar"),
-        flip("adaptive_color", "Match the colour of apps"),
-        { item: "Separator" },
-        flip("show_media", "Show Now Playing"),
-        flip("show_claude", "Show Claude usage"),
-        flip("show_codex", "Show Codex usage"),
-        flip("show_usage", "Show CPU / GPU / RAM"),
-        flip("show_weather", "Show weather"),
-      ],
-    },
-    ...logins,
-    { item: "Separator" },
-    { text: "Start with Windows", checked: auto, action: () => invoke("set_autostart", { on: !auto }) },
-    { text: upToDate ? "Up to date" : "Check for updates", enabled: !upToDate, action: check },
-    { item: "Separator" },
-    { text: "Hide Pane (Ctrl+Alt+P)", action: () => invoke("toggle") },
-    { text: "Quit Pane", action: () => invoke("quit") },
-  ];
 }
