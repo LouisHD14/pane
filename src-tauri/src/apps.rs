@@ -439,7 +439,7 @@ fn is_taskbar_window(visible: bool, cloaked: bool, owned: bool, ex_style: WINDOW
 static SEEN: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
 /// The windows that get a taskbar button, in z-order.
-fn taskbar_hwnds() -> Vec<HWND> {
+pub(crate) fn taskbar_hwnds() -> Vec<HWND> {
     unsafe extern "system" fn add(h: HWND, all: LPARAM) -> windows::core::BOOL {
         unsafe { (*(all.0 as *mut Vec<HWND>)).push(h) };
         true.into()
