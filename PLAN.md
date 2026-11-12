@@ -154,5 +154,10 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
 - Not possible: Store-app badges (`BadgeUpdateManager`, e.g. WhatsApp from the Store): no documented way to read another app's badge. Other ITaskbarList calls (progress bars, thumbnail buttons) are accepted and ignored.
 - **Live previews:** 400 ms hover on a running app → glass popup above the icon with a DWM thumbnail (`DwmRegisterThumbnail`) and title per window; click = that window to front; closes 0.3 s after the mouse left icon + popup (cursor polled every 50 ms only while open). One worker thread (`preview.rs`) owns the popup; it is reused while moving along the icons and destroyed on close (like the tray popup). Minimized windows show the app icon. Shown without activation; auto-hide holds the bar while it is open.
 
+### Reorder pinned apps, 2026-11-12 (branch `pin-reorder`, waiting for a live test)
+- **Drag to reorder** (asked for; decided with the user: the order lives in Pane only, Windows' own taskbar pins are not changed). `pin_order` (app ids) in `settings.json`; `apps::list` applies it on top of Windows' pin order: saved ids first, pins Pane doesn't know yet after them in Windows' order, unpinned ids dropped (unit test). A drop calls `set_pin_order`, which pushes the apps to every bar (with "Show apps from all monitors" on or off: pins are on every bar either way).
+- `reorder.ts`: pointer drag after 5 px (shorter presses stay clicks, right-click menus unchanged), the icon follows the pointer within the pins, the others slide aside, Escape cancels, the click after a drag is swallowed; no hover preview while dragging; app updates that come in during a drag are shown when it ends. Keyboard: Alt+Shift+Left/Right on a focused pinned icon. Running unpinned apps stay after the pins and can't be dragged.
+- Checked: `cargo test`, `npm run build`, and a headless Edge self-check of `reorder.ts` with CDP mouse/key input (click, drag, clamp, Escape, keyboard). Not checked live in the bar yet.
+
 ## Open questions
 - None. (Spotify + Claude on the left: used since Phase 4, no objection from the user.)
