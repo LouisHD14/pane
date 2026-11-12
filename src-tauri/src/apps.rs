@@ -91,13 +91,21 @@ impl Win {
 
 const ICON_PX: i32 = 48;
 
-/// Pinned apps first (in the user's Windows taskbar pin order), then running unpinned apps in order of first appearance.
-/// Only windows on the monitor whose rcMonitor equals `monitor` are listed in `windows` (None: windows of every
-/// monitor); pinned apps appear on every monitor, running unpinned apps only on monitors where they have windows.
+/// Pinned apps first (in Pane's saved order, else the user's Windows taskbar pin order), then running unpinned apps
+/// in order of first appearance. Only windows on the monitor whose rcMonitor equals `monitor` are listed in `windows`
+/// (None: windows of every monitor); pinned apps appear on every monitor, running unpinned apps only on monitors
+/// where they have windows.
 pub fn list(monitor: Option<RECT>) -> Vec<AppItem> {
     com();
-    let pins = pins();
+    let pins = ordered(pins(), &crate::settings::get().pin_order);
     group(&pins, &windows(monitor), info)
+}
+
+/// Windows' pins in Pane's saved order: saved ids first in that order, pins the saved order doesn't know yet after
+/// them in Windows' order. Unpinned ids in `order` simply don't match anything.
+fn ordered(mut pins: Vec<Pin>, order: &[String]) -> Vec<Pin> {
+    pins.sort_by_key(|p| order.iter().position(|id| *id == p.id).unwrap_or(usize::MAX)); // stable: new pins keep Windows' order
+    pins
 }
 
 /// Pins and windows -> taskbar items. `wins` come in first-seen order; `info` gives (name, icon) of an unpinned app.
@@ -824,6 +832,17 @@ mod tests {
         let items = group(&[], &[w], |_| ("Chat".into(), String::new()));
         let item = &items[0].windows[0];
         assert_eq!((item.badge.as_str(), item.badge_tip.as_str(), item.flashing), ("data:2", "1 new", true));
+    }
+
+    #[test]
+    fn saved_pin_order_on_top_of_windows_order() {
+        let pin = |id: &str| Pin { id: id.into(), ..Default::default() };
+        let windows = vec![pin("a"), pin("b"), pin("new1"), pin("c"), pin("new2")];
+        let saved: Vec<String> = ["c", "gone", "a", "b"].map(String::from).into();
+        let ids: Vec<_> = ordered(windows.clone(), &saved).into_iter().map(|p| p.id).collect();
+        assert_eq!(ids, ["c", "a", "b", "new1", "new2"], "saved first, new pins appended, unpinned dropped");
+        let ids: Vec<_> = ordered(windows, &[]).into_iter().map(|p| p.id).collect();
+        assert_eq!(ids, ["a", "b", "new1", "c", "new2"], "nothing saved: Windows' order");
     }
 
     #[test]
