@@ -143,7 +143,9 @@ static SLIDES: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 static SLIDE_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Auto-hide: slides the whole bar window (glass and icons together) between its place `rc` and just below the
-/// monitor's bottom edge in ~120 ms, ease-out, no bounce (decided with the user 2026-11-12). Hidden at the end of
+/// monitor's bottom edge in ~120 ms, no bounce (decided with the user 2026-11-12). Up: fast, then settling (ease-out);
+/// down: slow start, then away (ease-in). Ease-out on the way down rushed off and left a thin strip lingering at
+/// the edge, which looked like the bar disappeared weirdly. Hidden at the end of
 /// a slide down and parked back at its place, so everything else still finds it where it belongs.
 fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
     const FRAMES: i32 = 8;
@@ -153,7 +155,8 @@ fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
     std::thread::spawn(move || {
         let (from, to) = if show { (below, rc.top) } else { (rc.top, below) };
         for i in 0..=FRAMES {
-            let eased = 1.0 - (1.0 - i as f64 / FRAMES as f64).powi(3);
+            let t = i as f64 / FRAMES as f64;
+            let eased = if show { 1.0 - (1.0 - t).powi(3) } else { t.powi(3) };
             let top = from + ((to - from) as f64 * eased).round() as i32;
             let label = label.clone();
             on_main(&app, move |h| {
@@ -244,6 +247,7 @@ fn create_bars(app: &AppHandle) -> tauri::Result<()> {
             .visible(false)
             .build()?;
         win::set_glass(HWND(window.hwnd()?.0), GLASS_TINT);
+        win::no_transitions(HWND(window.hwnd()?.0));
         new.push(Bar { label, monitor, height, fullscreen: false, concealed: false, left_at: None });
     }
     *bars(app) = new;

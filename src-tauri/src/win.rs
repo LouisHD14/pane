@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use std::mem::size_of_val;
 use windows::core::{s, w, HSTRING, PCWSTR};
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND};
+use windows::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE};
@@ -270,6 +272,14 @@ pub fn set_glass(hwnd: HWND, tint: u32) {
 }
 
 /// Windows 11 rounded corners also for borderless windows (they clip the glass too), or square ones.
+/// Turns off Windows' own show/hide fade for a window: the auto-hide slide is the only animation.
+pub fn no_transitions(hwnd: HWND) {
+    let off: windows::core::BOOL = true.into();
+    unsafe {
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &off as *const _ as _, size_of_val(&off) as u32);
+    }
+}
+
 pub fn set_round(hwnd: HWND, round: bool) {
     let corners = if round { DWMWCP_ROUND } else { DWMWCP_DONOTROUND };
     unsafe {
