@@ -14,12 +14,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     SHAppBarMessage, ABE_BOTTOM, ABM_GETSTATE, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABM_SETSTATE,
-    ABS_AUTOHIDE, APPBARDATA, ShellExecuteW,
+    ABS_AUTOHIDE, APPBARDATA, DefSubclassProc, SetWindowSubclass, ShellExecuteW,
 };
+use windows::Win32::Foundation::{LRESULT, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{SWP_NOMOVE, SWP_NOSIZE, WINDOWPOS, WM_WINDOWPOSCHANGING};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetMonitorInfoW, MonitorFromRect,
-    ReleaseDC, SelectObject, MONITORINFO, MONITOR_DEFAULTTONEAREST, SRCCOPY,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
@@ -174,24 +175,48 @@ pub fn reserve_edge(hwnd: HWND, strip: RECT) {
     data.rc = strip;
     unsafe {
         SHAppBarMessage(ABM_NEW, &mut data); // false if already registered, which is fine
+        // The protocol asks first; the answer is ignored (Explorer's hidden taskbar still holds its
+        // 48 px for a moment after auto-hide turns on, which would put the bar too high).
         SHAppBarMessage(ABM_QUERYPOS, &mut data);
-        if data.rc.bottom != strip.bottom {
-            log(&format!("another bottom AppBar holds {} px; reserving the bottom edge anyway", strip.bottom - data.rc.bottom));
-        }
         data.rc = strip;
         SHAppBarMessage(ABM_SETPOS, &mut data);
     }
-    if let Some(work) = work_area(strip) {
-        if work.bottom != strip.top {
-            log(&format!("work area ends {} px above the bar's strip", strip.top - work.bottom));
-        }
+}
+
+/// Where each bar window must stay (hwnd, rect). Something outside Pane (seen 2026-11-12, most likely the
+/// shell while the taskbar's auto-hide changes) moved the bar 50 px up for a moment, which is what
+/// left the bar too high after auto-hide on â†’ off. `pin` makes the window refuse every other place.
+static PINNED: std::sync::Mutex<Vec<(isize, RECT)>> = std::sync::Mutex::new(Vec::new());
+
+/// Pins `hwnd` to `rc` (physical px), or unpins it with `None`. Main thread (the window's thread).
+pub fn pin(hwnd: HWND, rc: Option<RECT>) {
+    let mut pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner());
+    pinned.retain(|(h, _)| *h != hwnd.0 as isize);
+    match rc {
+        Some(rc) => pinned.push((hwnd.0 as isize, rc)),
+        None => return,
+    }
+    drop(pinned);
+    // Same proc and id again only updates the subclass, so calling this on every placement is fine.
+    unsafe {
+        let _ = SetWindowSubclass(hwnd, Some(keep_place), 1, 0);
     }
 }
 
-/// The work area (screen minus reserved edges) of the monitor that holds `rc`.
-fn work_area(rc: RECT) -> Option<RECT> {
-    let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-    unsafe { GetMonitorInfoW(MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST), &mut info) }.as_bool().then_some(info.rcWork)
+unsafe extern "system" fn keep_place(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
+    if msg == WM_WINDOWPOSCHANGING {
+        let rc = PINNED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(h, _)| *h == hwnd.0 as isize).map(|p| p.1);
+        if let Some(rc) = rc {
+            let pos = &mut *(lp.0 as *mut WINDOWPOS);
+            if !pos.flags.contains(SWP_NOMOVE) {
+                (pos.x, pos.y) = (rc.left, rc.top);
+            }
+            if !pos.flags.contains(SWP_NOSIZE) {
+                (pos.cx, pos.cy) = (rc.right - rc.left, rc.bottom - rc.top);
+            }
+        }
+    }
+    DefSubclassProc(hwnd, msg, wp, lp)
 }
 
 pub fn release_edge(hwnd: HWND) {

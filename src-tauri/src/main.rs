@@ -146,6 +146,7 @@ fn place_bars(app: &AppHandle, show: bool) {
                 win::reserve_edge(hwnd, strip);
             }
             win::set_round(hwnd, !settings.fill);
+            win::pin(hwnd, Some(rc));
             let _ = window.set_position(PhysicalPosition::new(rc.left, rc.top));
             let _ = window.set_size(PhysicalSize::new((rc.right - rc.left) as u32, (rc.bottom - rc.top) as u32));
             // Auto-hide starts shown; the cursor loop hides it once the mouse is elsewhere.
@@ -206,6 +207,7 @@ fn rebuild_bars(app: &AppHandle) {
         if let Some(window) = app.get_webview_window(&label) {
             if let Ok(hwnd) = window.hwnd() {
                 win::release_edge(HWND(hwnd.0));
+                win::pin(HWND(hwnd.0), None);
             }
             let _ = window.destroy();
         }
