@@ -41,9 +41,44 @@ function applySettings(s: Settings) {
 const me = getCurrentWebviewWindow();
 const $ = (id: string) => document.getElementById(id)!;
 
-// The "hidden icons" popup loads the same page; its window label tells it apart from a bar.
+// The "hidden icons" popup and the window preview load the same page; the window label tells them apart.
 if (me.label.startsWith("overflow-")) overflowPage();
+else if (me.label.startsWith("preview-")) previewPage();
 else barPage();
+
+type Card = { hwnd: number; title: string; active: boolean; rect: number[]; body: number[]; live: boolean };
+type Preview = { icon: string; cards: Card[] };
+
+/** Window previews above an app icon. Rust lays out the cards and DWM draws the live images into each `body`. */
+function previewPage() {
+  document.body.classList.add("preview");
+  const px = (el: HTMLElement, [x, y, w, h]: number[]) =>
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+  const show = (p: Preview | null) => {
+    if (!p) return;
+    document.body.replaceChildren(
+      ...p.cards.map((c) => {
+        const card = Object.assign(document.createElement("button"), { className: "card", title: c.title });
+        card.classList.toggle("active", c.active);
+        card.setAttribute("aria-label", `Switch to ${c.title}`);
+        const title = Object.assign(document.createElement("span"), { className: "card-title", textContent: c.title });
+        // Height of the title row = where the image starts.
+        Object.assign(title.style, { height: `${c.body[1]}px`, lineHeight: `${c.body[1]}px` });
+        const body = document.createElement("div");
+        body.className = c.live ? "card-body" : "card-body minimized";
+        px(body, c.body);
+        if (!c.live && p.icon) body.append(Object.assign(document.createElement("img"), { src: p.icon, alt: "" }));
+        card.append(title, body);
+        px(card, c.rect);
+        card.onclick = () => invoke("focus_window", { hwnd: c.hwnd });
+        return card;
+      }),
+    );
+  };
+  me.listen<Preview>("preview", (e) => show(e.payload));
+  invoke<Preview | null>("get_preview").then(show);
+  document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("hide_preview"));
+}
 
 /** Popup above the ^ arrow with the tray icons that aren't promoted to the bar. */
 function overflowPage() {
@@ -98,6 +133,8 @@ function barPage() {
       const b = old.get(app.id) ?? document.createElement("button");
       if (!old.delete(app.id) && !firstPaint) once(b, "enter");
       updateAppButton(b, app);
+      b.onmouseenter = () => hoverApp(b);
+      b.onmouseleave = () => clearTimeout(hoverTimer);
       return b;
     });
     // Closed apps shrink away at their old spot, then go.
@@ -111,6 +148,27 @@ function barPage() {
   };
   invoke<AppItem[]>("get_apps").then(renderApps);
   me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
+
+  // --- Live preview after a short hover on a running app; quicker when one is already open (moving along the
+  // icons). Rust closes it once the mouse has left icon and popup for a moment.
+  let hoverTimer = 0;
+  let previewOpen = false;
+  const hoverApp = (b: HTMLElement) => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      const app = apps.find((a) => a.id === b.dataset.id);
+      if (!app?.windows.length || !b.matches(":hover")) return;
+      const r = b.getBoundingClientRect();
+      previewOpen = true;
+      invoke("show_preview", { id: app.id, left: r.left, right: r.right });
+    }, previewOpen ? 120 : 400);
+  };
+  me.listen("preview-closed", () => (previewOpen = false));
+  const closePreview = () => {
+    clearTimeout(hoverTimer);
+    if (previewOpen) invoke("hide_preview");
+  };
+  $("apps").addEventListener("click", closePreview);
 
   // --- Tray: promoted icons on the bar, the rest behind the ^ arrow.
   const showTray = (icons: TrayIcon[]) => {
@@ -178,6 +236,7 @@ function barPage() {
   // --- Right-click: app menu on an app icon, Pane menu everywhere else (tray icons handle their own).
   document.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
+    closePreview();
     const id = (e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);
     const menu = await Menu.new({ items: app ? appMenu(app) : await paneMenu() });
