@@ -285,6 +285,14 @@ pub fn show_inactive(hwnd: HWND) {
     }
 }
 
+/// Hides a bar. Use this, not Tauri's `hide()`, for windows shown with `show_inactive`: Tauri only hides a
+/// window it showed itself (it still thinks it is hidden), so its `hide()` did nothing.
+pub fn hide(hwnd: HWND) {
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
 pub fn window_rect(hwnd: HWND) -> Option<RECT> {
     let mut rc = RECT::default();
     unsafe { GetWindowRect(hwnd, &mut rc) }.ok().map(|_| rc)

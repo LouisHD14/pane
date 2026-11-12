@@ -143,7 +143,7 @@ fn place_bars(app: &AppHandle, show: bool) {
             }
         } else {
             win::release_edge(hwnd);
-            let _ = window.hide();
+            win::hide(hwnd);
         }
     }
 }
@@ -225,7 +225,9 @@ fn check_fullscreen(app: &AppHandle) {
     for (label, fullscreen, concealed) in changes {
         let Some(window) = app.get_webview_window(&label) else { continue };
         if fullscreen {
-            let _ = window.hide();
+            if let Ok(hwnd) = window.hwnd() {
+                win::hide(HWND(hwnd.0));
+            }
         } else if !concealed {
             if let Ok(hwnd) = window.hwnd() {
                 win::show_inactive(HWND(hwnd.0));
@@ -325,7 +327,9 @@ fn autohide_loop(app: AppHandle) {
                     }
                     let _ = h.emit_to(label.as_str(), "shown", ()); // slide-in animation
                 } else {
-                    let _ = window.hide();
+                    if let Ok(hwnd) = window.hwnd() {
+                        win::hide(HWND(hwnd.0));
+                    }
                 }
             });
         }
