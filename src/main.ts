@@ -14,6 +14,7 @@ import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexU
 import { applyTint } from "./tint";
 import { menuPage, type Settings } from "./menu";
 import { reorderPins } from "./reorder";
+import { arrangeElements } from "./arrange";
 import { settingsPage } from "./settings";
 
 type Progress = { state: "normal" | "paused" | "error" | "indeterminate"; value: number };
@@ -36,8 +37,11 @@ const WIDGETS = [
 ] as const;
 let settings: Settings | null = null;
 let onSettings = () => {};
+/** The bar page's element order (arrange.ts); other pages have none. */
+let arrange: ReturnType<typeof arrangeElements> | null = null;
 function applySettings(s: Settings) {
   settings = s;
+  arrange?.set(s.element_order);
   for (const w of WIDGETS) document.body.classList.toggle(`no-${w}`, !s[`show_${w}`]);
   onSettings();
   document.body.classList.toggle("fill", s.fill);
@@ -302,6 +306,12 @@ function barPage() {
     },
     save: (order) => invoke("set_pin_order", { order }),
   });
+  // The other elements (widgets, system load, tray, status icons, clock) are dragged along their side of the bar.
+  arrange = arrangeElements(document.querySelector<HTMLElement>(".bar")!, {
+    start: () => closePreview(),
+    save: (order) => invoke("set_element_order", { order }),
+  });
+  if (settings) arrange.set(settings.element_order);
   invoke<AppItem[]>("get_apps").then(renderApps);
   me.listen<AppItem[]>("apps", (e) => renderApps(e.payload));
 
@@ -465,7 +475,7 @@ function barPage() {
   // --- Right-click: app menu on an app icon, Pane menu (own popup, menu.ts) everywhere else (tray icons handle their own).
   document.addEventListener("contextmenu", async (e) => {
     e.preventDefault();
-    if (reorder.dragging()) return;
+    if (reorder.dragging() || arrange?.dragging()) return;
     closePreview();
     const id =(e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);

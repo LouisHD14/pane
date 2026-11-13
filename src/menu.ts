@@ -27,6 +27,8 @@ export type Settings = {
   show_date: boolean;
   done_glow: boolean;
   volume_media: boolean;
+  /** Bar elements in the user's order (arrange.ts). */
+  element_order: string[];
   /** Glass lightness 0 (dark) ..= 100 (light), 50 = the original look. */
   glass: number;
   hide_delay_ms: number;

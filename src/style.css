@@ -117,7 +117,7 @@ body::before {
 }
 
 body.tinted {
-  transition: --t0 0.6s, --t1 0.6s, --t2 0.6s, --t3 0.6s, --t4 0.6s, --t5 0.6s, --t6 0.6s, --t7 0.6s;
+  transition: --t0 0.4s, --t1 0.4s, --t2 0.4s, --t3 0.4s, --t4 0.4s, --t5 0.4s, --t6 0.4s, --t7 0.4s;
 }
 
 body.tinted::before {
@@ -366,6 +366,28 @@ button:focus-visible {
    buttons' transform transition; `settle` holds the dropped icon in place for one frame before it glides home. */
 .app.pinned {
   touch-action: none;
+}
+
+/* Bar elements being rearranged (arrange.ts): the one under the mouse floats over the others. */
+.bar.arranging,
+.bar.arranging * {
+  cursor: grabbing;
+}
+
+[data-move].moving {
+  z-index: 2;
+  border-radius: 6px;
+  background-color: var(--hover);
+}
+
+.tray-zone {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+body.no-tray .tray-zone {
+  display: none;
 }
 
 .app.dragging {

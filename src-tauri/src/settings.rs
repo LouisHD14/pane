@@ -52,6 +52,9 @@ pub struct Settings {
     /// The user's own order of the pinned apps (app ids), set by dragging them in the bar. Only Pane's order:
     /// Windows' own taskbar pins stay as they are. Empty: Windows' pin order.
     pub pin_order: Vec<String>,
+    /// The user's order of the bar's elements (main.ts `ELEMENTS` keys: "claude", "usage", "clock", …), set by
+    /// dragging them along their side of the bar. Empty: the built-in order.
+    pub element_order: Vec<String>,
     /// How light the glass is: 0 dark ..= 100 light, 50 is Pane's original look. Darker adds acrylic tint
     /// (`tint`), lighter removes it and the pages add a white sheen (main.ts `applyLook`).
     pub glass: u8,
@@ -113,6 +116,7 @@ impl Default for Settings {
             autostart_set: false,
             admin_warned: false,
             pin_order: Vec::new(),
+            element_order: Vec::new(),
             glass: 50,
             hide_delay_ms: 700,
             // With the overshoot and settle (main.rs `slide`); 120 ms was a plain slide.
@@ -212,6 +216,11 @@ pub fn set(key: &str, value: &Value) -> Option<Settings> {
 /// Saves the pinned apps' order (app ids, first = leftmost).
 pub fn set_pin_order(order: Vec<String>) -> Settings {
     save(Settings { pin_order: order, ..get() })
+}
+
+/// Saves the bar elements' order (keys, left to right; unknown keys are ignored by the pages).
+pub fn set_element_order(order: Vec<String>) -> Settings {
+    save(Settings { element_order: order, ..get() })
 }
 
 fn save(s: Settings) -> Settings {

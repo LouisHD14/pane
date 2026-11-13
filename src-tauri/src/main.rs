@@ -247,7 +247,11 @@ fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
             }
             win::next_frame();
         }
-        if !show && current() {
+        // Away: parked just below the screen, still shown, rather than hidden. A hidden window's page stops
+        // drawing and its acrylic is rebuilt when it is shown again, so for a moment the bar coming up showed the
+        // bare blur (the desktop's colours) and old content (reported 2026-11-13). Hidden only where another
+        // monitor sits below this one (the parked bar would show there).
+        if !show && current() && win::on_a_monitor(at(1.0)) {
             win::show_async(hwnd, false);
             win::move_pinned_async(hwnd, rc);
         }
@@ -516,14 +520,15 @@ fn autohide_loop(app: AppHandle) {
     });
 }
 
-/// Adaptive colour and the app-colour floor: every 0.75 s, the colours of the app sitting on each bar
-/// (colors.rs), sent to that bar once they held still. Only while one of the settings is on and the bar is visible.
+/// Adaptive colour and the app-colour floor: every 0.5 s, the colours of the app sitting on each bar
+/// (colors.rs), sent to that bar once they held still, or at once for another app or a bar that is slid away
+/// (so it comes up in the right colours). Only while one of the settings is on; not behind fullscreen apps.
 fn tint_loop(app: AppHandle) {
     std::thread::spawn(move || {
         let mut steady: HashMap<String, colors::Steady> = HashMap::new();
         let mut was_on = false;
         loop {
-            std::thread::sleep(Duration::from_millis(750));
+            std::thread::sleep(Duration::from_millis(500));
             let s = settings::get();
             let on = SHOWN.load(SeqCst) && (s.adaptive_color || s.blend);
             if !on {
@@ -535,14 +540,14 @@ fn tint_loop(app: AppHandle) {
                 continue;
             }
             was_on = true;
-            let targets: Vec<(String, RECT, RECT)> = bars(&app)
+            let targets: Vec<(String, RECT, RECT, bool)> = bars(&app)
                 .iter()
-                .filter(|b| !b.concealed && !b.fullscreen)
-                .map(|b| (b.label.clone(), b.layout(&s).0, b.monitor))
+                .filter(|b| !b.fullscreen)
+                .map(|b| (b.label.clone(), b.layout(&s).0, b.monitor, b.concealed))
                 .collect();
-            for (label, strip, monitor) in targets {
-                let now = colors::app_floor(monitor, strip, 8);
-                if let Some(show) = steady.entry(label.clone()).or_default().feed(now) {
+            for (label, strip, monitor, away) in targets {
+                let (window, now) = colors::app_floor(monitor, strip, 8);
+                if let Some(show) = steady.entry(label.clone()).or_default().feed(window, now, away) {
                     let _ = app.emit_to(label.as_str(), "tint", show);
                 }
             }
@@ -1005,6 +1010,13 @@ async fn set_pin_order(app: AppHandle, order: Vec<String>) {
     push_apps(&app);
 }
 
+/// The bar elements' new order after a drag in one bar; every page gets it with the settings.
+#[tauri::command]
+async fn set_element_order(app: AppHandle, order: Vec<String>) {
+    let now = settings::set_element_order(order.into_iter().filter(|k| k.len() <= 32).take(32).collect());
+    let _ = app.emit("settings", &now);
+}
+
 #[tauri::command]
 async fn open_volume_mixer() {
     win::open("ms-settings:apps-volume");
@@ -1401,6 +1413,7 @@ fn main() {
             get_settings,
             set_setting,
             set_pin_order,
+            set_element_order,
             open_settings,
             fit_popup,
             warm_preview,
