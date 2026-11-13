@@ -62,6 +62,8 @@ Pane puts a bar on **every monitor**, each showing that monitor's windows, and g
 
 **More settings…** opens a window with glass lightness, bar height (small / normal / large), auto-hide timing (with a "Taskbar-like" preset), low-memory mode, release download counts and **Report a bug…**.
 
+**Rearrange the bar** by dragging: pinned apps, the widgets on the left, and system load, tray, status icons and clock on the right each move along their side, like icons on the Windows taskbar. `Alt+Shift+←/→` moves a focused one.
+
 **Auto-hide** floats the bar over your apps and slides it away; touch the bottom edge to bring it back. It stays up while a menu or preview is open.
 
 ## Turning it off
