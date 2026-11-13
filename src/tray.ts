@@ -14,6 +14,7 @@ export function renderTray(box: HTMLElement, icons: TrayIcon[]) {
       const b = document.createElement("button");
       b.className = known && !known.has(t.id) ? "tray-icon enter" : "tray-icon";
       b.title = t.tip;
+      b.dataset.id = t.id; // the icon's GUID or "hwnd:uid", also for test scripts
       b.setAttribute("aria-label", t.tip || "Tray icon");
       const img = document.createElement("img");
       img.src = t.icon;

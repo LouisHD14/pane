@@ -16,6 +16,15 @@ pub struct Weather {
     pub kind: Kind,
 }
 
+/// What the bar shows: the weather, or why there is none. A switched-on weather widget that silently showed
+/// nothing looked like a missing setting (asked 2026-11-13), so a failed read says so instead of vanishing.
+#[derive(Serialize, Clone, PartialEq, Debug, Default)]
+pub struct Report {
+    pub now: Option<Weather>,
+    /// Short reason ("offline", "location off", …); empty while `now` is there or nothing was read yet.
+    pub note: String,
+}
+
 #[derive(Serialize, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {

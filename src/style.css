@@ -140,8 +140,26 @@ body.no-media #media,
 body.no-claude #claude,
 body.no-codex #codex,
 body.no-usage #usage,
-body.no-weather #weather {
+body.no-weather #weather,
+body.no-docker #docker,
+body.no-start #start,
+body.no-tray #tray,
+body.no-tray #overflow,
+body.no-network .st-network,
+body.no-volume .vol-wrap,
+body.no-battery .st-battery,
+body.no-date #date,
+body.no-clock #time {
   display: none !important;
+}
+
+/* Time and date both off: the weather keeps the block; all three off: no empty block. */
+body.no-clock.no-date .clock {
+  display: none;
+}
+
+body.no-clock.no-date.no-weather .time-block {
+  display: none;
 }
 
 body.shine::after {
@@ -178,6 +196,34 @@ body.shine::after {
 @keyframes rise {
   from { transform: translateY(18px); opacity: 0; }
   to { transform: none; opacity: 1; }
+}
+
+/* Auto-hide (main.rs `slide` moves the window): on the way up the three groups settle in a quick cascade,
+   left to right, a few px behind the glass; on the way down they dip and dim a touch, like being let go.
+   Only transforms and opacity, so the compositor draws it without repainting the bar. */
+.bar.arrive > * {
+  animation: settle calc(var(--slide-ms, 260ms) + 120ms) cubic-bezier(0.25, 1.35, 0.5, 1) backwards;
+}
+
+.bar.arrive > .center {
+  animation-delay: 35ms;
+}
+
+.bar.arrive > .right {
+  animation-delay: 70ms;
+}
+
+@keyframes settle {
+  from { transform: translateY(7px) scale(0.985); opacity: 0.4; }
+  to { transform: none; opacity: 1; }
+}
+
+.bar.depart > * {
+  animation: let-go calc(var(--slide-ms, 260ms) * 0.9) cubic-bezier(0.5, 0, 0.75, 0) forwards;
+}
+
+@keyframes let-go {
+  to { transform: translateY(4px) scale(0.99); opacity: 0.55; }
 }
 
 /* ---------- Buttons: soft hover, springy press. */
@@ -544,7 +590,8 @@ body.overflow.open .tray-icon {
 }
 
 /* ---------- Window previews: glass popup above an app icon; DWM draws each live image into a card's body. */
-body.preview {
+body.preview,
+body.preview.preview-in {
   animation: fade 0.15s var(--ease);
 }
 
@@ -583,13 +630,13 @@ body.preview {
 /* Shows on hover (or keyboard focus), Windows' red on its own hover. */
 .card-close {
   position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 20px;
-  height: 20px;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   font-size: 10px;
-  line-height: 20px;
+  line-height: 18px;
   border-radius: 5px;
   opacity: 0;
 }
@@ -645,8 +692,8 @@ body.preview {
 
 .card-title {
   position: absolute;
-  left: 10px;
-  right: 30px;
+  left: 6px;
+  right: 24px;
   top: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -781,6 +828,263 @@ body.preview {
   stroke: #ffd60a;
 }
 
+/* ---------- Music controls that pop out of the volume icon while something plays (media.ts mountMiniMedia).
+   They float over the icons to the left, so nothing else moves; scale + fade from the icon (compositor only). */
+.vol-wrap {
+  position: relative;
+  display: flex;
+}
+
+/* A small dot under the speaker: music is playing, the controls are here. */
+.vol-wrap.playing .st-volume::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pop 0.3s var(--spring);
+}
+
+.st-volume {
+  position: relative;
+}
+
+.mini-media {
+  position: absolute;
+  right: calc(100% - 4px);
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 32px;
+  padding: 0 3px;
+  border-radius: 16px;
+  background: rgb(28 30 38 / 0.86);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 2px 10px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(14px);
+  transform-origin: right center;
+  transform: translateY(-50%) translateX(8px) scale(0.6);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.16s cubic-bezier(0.5, 0, 0.75, 0), opacity 0.12s linear;
+}
+
+.vol-wrap.open .mini-media {
+  transform: translateY(-50%);
+  opacity: 1;
+  pointer-events: auto;
+  transition: transform 0.32s cubic-bezier(0.25, 1.4, 0.5, 1), opacity 0.12s linear;
+}
+
+.mini-media button {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+}
+
+.mini-media svg {
+  width: 13px;
+  height: 13px;
+  fill: #fff;
+  stroke: none;
+}
+
+.mini-media .toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.vol-wrap.open .mini-media button {
+  animation: drop 0.26s var(--spring) backwards;
+}
+
+.vol-wrap.open .mini-media button:nth-child(2) {
+  animation-delay: 30ms;
+}
+
+.vol-wrap.open .mini-media button:nth-child(1) {
+  animation-delay: 60ms;
+}
+
+/* ---------- Docker widget: stacked boxes and the number of running containers. */
+.docker {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 36px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  animation: fade 0.4s var(--ease);
+}
+
+.docker svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: #4ea8ff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.4s var(--spring);
+}
+
+.docker:hover svg {
+  transform: translateY(-1px) scale(1.1);
+}
+
+.docker.idle {
+  color: var(--text-dim);
+}
+
+.docker.idle svg {
+  stroke: var(--text-dim);
+}
+
+/* Docker popup (docker.ts): sizes itself like the Pane menu. */
+.docker-list {
+  width: max-content;
+  min-width: 300px;
+  max-width: 460px;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 6px;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  animation: drop 0.22s var(--ease);
+}
+
+.docker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 6px 8px 10px;
+  color: var(--text-dim);
+}
+
+.docker-head b {
+  color: var(--text);
+}
+
+.docker-head button {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  background: var(--glass);
+}
+
+.docker-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 6px;
+  transition: background-color 0.18s var(--ease), opacity 0.2s var(--ease);
+}
+
+.docker-row:hover {
+  background: var(--hover);
+}
+
+.docker-row.busy {
+  opacity: 0.55;
+}
+
+.docker-row .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.6;
+}
+
+.docker-row.running .dot {
+  background: #3ddc84;
+  opacity: 1;
+  box-shadow: 0 0 6px rgba(61, 220, 132, 0.6);
+}
+
+.docker-row.paused .dot,
+.docker-row.restarting .dot {
+  background: #fce100;
+  opacity: 1;
+}
+
+.docker-row .what {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.docker-row .name,
+.docker-row .what small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docker-row:not(.running) .name {
+  color: var(--text-dim);
+}
+
+.docker-row small {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.docker-row .acts {
+  display: flex;
+  gap: 2px;
+}
+
+.docker-row .acts button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.docker-row .acts svg {
+  width: 13px;
+  height: 13px;
+  fill: var(--text);
+  stroke: var(--text);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.docker-row .acts [data-act="restart"] svg {
+  fill: none;
+}
+
+.docker-row .acts button:disabled {
+  opacity: 0.4;
+}
+
+.docker-empty,
+.docker-error {
+  padding: 10px;
+  color: var(--text-dim);
+}
+
+.docker-error {
+  color: #ff99a4;
+}
+
 /* ---------- System load */
 .usage {
   display: flex;
@@ -888,6 +1192,11 @@ body.preview {
 .time {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* Weather that couldn't be read: dim, so it reads as "not available" rather than as the real temperature. */
+.weather.no-data {
+  opacity: 0.45;
 }
 
 .time.tick {
@@ -1099,6 +1408,48 @@ body.preview {
   --brand: #7fd1b9;
 }
 
+/* ---------- "Done" glow (main.ts, agent-done): Claude Code (orange) or Codex (blue) finished a task. A shine
+   sweeps in from the left edge, then a soft glow stays there until the mouse comes by ("seen" fades it). */
+.claude {
+  position: relative;
+  --glow: 255 138 76;
+}
+
+.codex {
+  --glow: 76 168 255;
+}
+
+.claude::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 120% at 0% 50%, rgb(var(--glow) / 0.55), transparent 70%),
+    linear-gradient(90deg, rgb(var(--glow) / 0.9) 0, rgb(var(--glow) / 0) 3px);
+  opacity: 0;
+}
+
+.claude.done::before {
+  animation: done-shine 1.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.claude.done.seen::before {
+  animation: done-fade 0.6s var(--ease) forwards;
+}
+
+@keyframes done-shine {
+  0% { opacity: 0; transform: scaleX(0.2); transform-origin: left; }
+  25% { opacity: 1; transform: scaleX(1.25); transform-origin: left; }
+  100% { opacity: 0.6; transform: scaleX(1); transform-origin: left; }
+}
+
+@keyframes done-fade {
+  from { opacity: 0.6; }
+  to { opacity: 0; }
+}
+
 .codex svg {
   fill: none;
   stroke: var(--brand);
@@ -1299,6 +1650,63 @@ body.settings::after {
   padding: 0 14px;
   border: 1px solid var(--glass-border);
   background: var(--glass);
+}
+
+/* Nothing to see here. */
+.egg {
+  width: 420px;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 16px 18px 14px;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  animation: drop 0.28s var(--spring);
+}
+
+.egg h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  background: linear-gradient(95deg, #ffd166, #ff8a4c 55%, #ff5f57);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.egg .sub {
+  margin: 4px 0 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.egg ol {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.egg li::marker {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.egg ol + .sub {
+  margin: 12px 0 0;
+}
+
+.egg-edit {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 5px;
 }
 
 /* Windows "Animation effects" off → no motion. */

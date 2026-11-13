@@ -37,10 +37,29 @@ const LABEL: Record<Weather["kind"], string> = {
   thunder: "Thunderstorm",
 };
 
-/** `null` (no location / offline) hides the row; the clock then sits alone in the block. */
-export function renderWeather(el: HTMLElement, w: Weather | null) {
-  el.hidden = !w;
-  if (!w) return;
+/** The weather, or why there is none. */
+export type Report = { now: Weather | null; note: string };
+
+/** Why a reason is readable: "offline (timeout)" → "Offline". */
+const reason = (note: string) => {
+  const short = note.replace(/\s*\(.*\)\s*$/, "");
+  return short.charAt(0).toUpperCase() + short.slice(1);
+};
+
+/** The weather row, or a dim placeholder saying why there is none (so a widget that is switched on is never
+ * silently empty, which looked like a missing setting). Nothing read yet hides the row; the clock then sits
+ * alone in the block. */
+export function renderWeather(el: HTMLElement, r: Report | null) {
+  const w = r?.now ?? null;
+  el.hidden = !r || (!w && !r.note);
+  el.classList.toggle("no-data", !w);
+  if (el.hidden) return;
+  if (!w) {
+    el.innerHTML = `${svg(`<path d="M7 16h10a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.6 1.5A3.3 3.3 0 0 0 7 16z"/><path d="M4 20 20 4"/>`)}<span>--</span>`;
+    el.title = `No weather: ${reason(r!.note).toLowerCase()}\nPane keeps trying. Switch the weather off in Settings > Widgets.`;
+    el.setAttribute("aria-label", `No weather, ${reason(r!.note).toLowerCase()}`);
+    return;
+  }
   const temp = `${Math.round(w.temp_c)}°`;
   el.innerHTML = `${svg(ICONS[w.kind](w.is_day))}<span>${temp}</span>`;
   el.title = `${LABEL[w.kind]}, ${temp}C`;

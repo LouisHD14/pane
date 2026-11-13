@@ -6,7 +6,7 @@ use std::fs;
 use std::mem::size_of_val;
 use windows::core::{s, w, HSTRING, PCWSTR};
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
+    DwmFlush, DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
@@ -20,7 +20,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::Foundation::{LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOWPOS, WM_WINDOWPOSCHANGING,
+    SetWindowPos, ShowWindowAsync, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WINDOWPOS, WM_WINDOWPOSCHANGING,
 };
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::{
@@ -192,10 +192,58 @@ pub fn reserve_edge(hwnd: HWND, strip: RECT) {
 /// left the bar too high after auto-hide on â†’ off. `pin` makes the window refuse every other place.
 static PINNED: std::sync::Mutex<Vec<(isize, RECT)>> = std::sync::Mutex::new(Vec::new());
 
-/// Moves a window's top-left corner without resizing, activating or changing its z-order.
-pub fn move_to(hwnd: HWND, x: i32, y: i32) {
+/// One animation frame from any thread: pins `hwnd` to `rc` and moves it there without waiting for the window's
+/// thread (SWP_ASYNCWINDOWPOS), so a busy main thread can't stall the slide. The subclass must already be
+/// installed (`pin` on the main thread).
+pub fn move_pinned_async(hwnd: HWND, rc: RECT) {
+    {
+        let mut pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner());
+        pinned.retain(|(h, _)| *h != hwnd.0 as isize);
+        pinned.push((hwnd.0 as isize, rc));
+    }
     unsafe {
-        let _ = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        let _ = SetWindowPos(hwnd, None, rc.left, rc.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+    }
+}
+
+/// Show (without activating) or hide from any thread, without waiting for the window's thread.
+pub fn show_async(hwnd: HWND, show: bool) {
+    unsafe {
+        let _ = ShowWindowAsync(hwnd, if show { SW_SHOWNA } else { SW_HIDE });
+    }
+}
+
+/// Waits for the next frame DWM composes (the display's refresh), so animation steps land on real frames
+/// instead of the ~15.6 ms sleep tick. Falls back to a 1/60 s sleep when DWM can't be asked.
+pub fn next_frame() {
+    if unsafe { DwmFlush() }.is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+}
+
+/// True when a popup menu (window class `#32768`: app context menus, tray menus, Pane's app menu) is open and
+/// touches `area`. Auto-hide keeps the bar up meanwhile, so a menu never floats over a bar that slid away.
+pub fn menu_open_in(area: RECT) -> bool {
+    let mut after: Option<HWND> = None;
+    unsafe {
+        loop {
+            let Ok(menu) = FindWindowExW(None, after, w!("#32768"), PCWSTR::null()) else { return false };
+            if menu.0.is_null() {
+                return false;
+            }
+            let mut rc = RECT::default();
+            if IsWindowVisible(menu).as_bool()
+                && GetWindowRect(menu, &mut rc).is_ok()
+                && rc.right - rc.left > 1
+                && rc.left < area.right
+                && rc.right > area.left
+                && rc.top < area.bottom
+                && rc.bottom > area.top
+            {
+                return true;
+            }
+            after = Some(menu);
+        }
     }
 }
 
@@ -288,6 +336,23 @@ pub fn set_round(hwnd: HWND, round: bool) {
 }
 
 /// Opens a file, app or URI like double-clicking it, e.g. "ms-settings:apps-volume".
+/// "10.0.26100" style Windows version from the registry (for bug reports), "unknown" if unreadable.
+pub fn windows_build() -> String {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let key = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
+    let read = |name: PCWSTR| -> Option<String> {
+        let mut buf = [0u16; 128];
+        let mut size = (buf.len() * 2) as u32;
+        let ok = unsafe { RegGetValueW(HKEY_LOCAL_MACHINE, key, name, RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as _), Some(&mut size)) };
+        ok.is_ok().then(|| String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)]))
+    };
+    match (read(w!("CurrentBuildNumber")), read(w!("DisplayVersion"))) {
+        (Some(build), Some(display)) => format!("{display} (build {build})"),
+        (Some(build), None) => format!("build {build}"),
+        _ => "unknown".into(),
+    }
+}
+
 pub fn open(target: &str) {
     unsafe { ShellExecuteW(None, w!("open"), &HSTRING::from(target), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
 }

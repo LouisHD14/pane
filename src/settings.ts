@@ -5,6 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Settings, Switch } from "./menu";
 
+/** How often Pane's releases were downloaded (update.rs `Downloads`). */
+type Downloads = { total: number; installers: number; this_version: number | null; newest: string; releases: number };
+
 /** Creates an element with properties and children. */
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: object = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] {
   const e = Object.assign(document.createElement(tag), props);
@@ -103,6 +106,27 @@ export async function settingsPage() {
     check.disabled = false;
   };
 
+  const version = el("span", { className: "note" });
+
+  // How often Pane's releases were downloaded, read from GitHub when this window opens. Keeps nothing and
+  // sends nothing about this PC; it only reads the public release page.
+  const counts = el("span", { className: "note" });
+  counts.setAttribute("role", "status");
+  const refresh = el("button", { className: "button", textContent: "Refresh" });
+  const loadDownloads = async () => {
+    refresh.disabled = true;
+    counts.textContent = "Reading GitHub…";
+    try {
+      const d = await invoke<Downloads>("get_downloads");
+      const n = (v: number) => v.toLocaleString();
+      const mine = d.this_version === null ? "" : ` · ${n(d.this_version)} on this version`;
+      counts.textContent = `${n(d.installers)} installers downloaded${mine} · ${n(d.total)} files over ${d.releases} release${d.releases === 1 ? "" : "s"}`;
+    } catch (e) {
+      counts.textContent = `Couldn't read the download counts (${e}).`;
+    }
+    refresh.disabled = false;
+  };
+  refresh.onclick = loadDownloads;
   const lightness = (v: number) => (v === 50 ? "Default" : v < 50 ? `Darker ${50 - v}` : `Lighter ${v - 50}`);
   document.body.replaceChildren(
     el(
@@ -121,8 +145,8 @@ export async function settingsPage() {
       ),
       group(
         "Auto-hide",
-        slider("hide_delay_ms", "Hide after", 100, 3000, 50, seconds),
-        slider("slide_ms", "Slide duration", 0, 400, 10, (v) => (v ? `${v} ms` : "Instant")),
+        slider("hide_delay_ms", "Stays after the mouse leaves", 100, 3000, 50, (v) => seconds(v) + (v === 700 ? " (default)" : "")),
+        slider("slide_ms", "Slide duration", 0, 600, 10, (v) => (v ? `${v} ms` : "Instant") + (v === 260 ? " (default)" : "")),
       ),
       group(
         "Widgets",
@@ -131,12 +155,51 @@ export async function settingsPage() {
         toggle("show_codex", "Codex usage"),
         toggle("show_usage", "CPU / GPU / RAM"),
         toggle("show_weather", "Weather"),
+        toggle("show_docker", "Docker (only while Docker runs)"),
+        toggle("done_glow", "Glow when Claude Code / Codex finish a task"),
+      ),
+      group(
+        "Show on the bar",
+        toggle("show_start", "Start button"),
+        toggle("show_tray", "Tray icons"),
+        toggle("show_network", "Network"),
+        toggle("show_volume", "Volume"),
+        toggle("volume_media", "Music controls at the volume icon"),
+        toggle("show_battery", "Battery"),
+        toggle("show_clock", "Time"),
+        toggle("show_date", "Date"),
       ),
       group("Memory", toggle("low_memory", "Low memory mode (no GPU, applies after restart)")),
-      group("Windows", el("label", { className: "row" }, el("span", {}, "Start with Windows"), autostart)),
+      group(
+        "Windows",
+        el("label", { className: "row" }, el("span", {}, "Start with Windows"), autostart),
+        el(
+          "div",
+          { className: "row" },
+          el("span", { className: "note" }, "Also under “Startup apps” in Task Manager — switching it off there switches it off here."),
+        ),
+      ),
       group("Updates", el("div", { className: "row" }, status, check)),
+      group("Downloads", el("div", { className: "row" }, counts, refresh)),
+      group(
+        "Help",
+        el(
+          "div",
+          { className: "row" },
+          el("span", { className: "note" }, "Something wrong? Opens a bug report on GitHub with Pane's version filled in."),
+          el("button", { className: "button", textContent: "Report a bug…", onclick: () => invoke("report_bug") }),
+        ),
+        el(
+          "div",
+          { className: "row" },
+          version,
+          el("button", { className: "button", textContent: "Open log folder", onclick: () => invoke("open_log_folder") }),
+        ),
+      ),
     ),
   );
+  invoke<string>("app_version").then((v) => (version.textContent = `Pane ${v} · the log (pane.log) helps with bug reports`));
+  loadDownloads();
 
   const apply = (s: Settings) => updates.forEach((u) => u(s));
   me.listen<Settings>("settings", (e) => apply(e.payload));

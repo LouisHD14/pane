@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Menu, type MenuItemOptions, type PredefinedMenuItemOptions } from "@tauri-apps/api/menu";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { renderStatus, type Status } from "./status";
+import { mountStatus, renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
-import { mountMedia, renderMedia, type NowPlaying } from "./media";
-import { renderWeather, type Weather } from "./weather";
+import { mountMedia, mountMiniMedia, renderMedia, renderMiniMedia, type NowPlaying } from "./media";
+import { dockerPage, renderDocker, type Docker } from "./docker";
+import { eggPage } from "./egg";
+import { renderWeather, type Report as WeatherReport } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
 import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
@@ -26,12 +28,17 @@ type WinItem = {
 type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
 type Item = MenuItemOptions | PredefinedMenuItemOptions;
 
-/** Widget switches hide their widget with a class on <body> (the widget keeps updating, it's just not shown). */
-const WIDGETS = ["media", "claude", "codex", "usage", "weather"] as const;
+/** Widget and element switches hide their part with a class on <body> (it keeps updating, it's just not shown). */
+const WIDGETS = [
+  "media", "claude", "codex", "usage", "weather", "docker",
+  "start", "tray", "network", "volume", "battery", "clock", "date",
+] as const;
 let settings: Settings | null = null;
+let onSettings = () => {};
 function applySettings(s: Settings) {
   settings = s;
   for (const w of WIDGETS) document.body.classList.toggle(`no-${w}`, !s[`show_${w}`]);
+  onSettings();
   document.body.classList.toggle("fill", s.fill);
   document.body.classList.toggle("blend", s.blend && !s.fill);
   if (!s.adaptive_color && !s.blend) applyTint(null);
@@ -60,6 +67,8 @@ me.listen<Settings>("settings", (e) => applyLook(e.payload));
 if (me.label.startsWith("overflow-")) overflowPage();
 else if (me.label.startsWith("menu-")) menuPage();
 else if (me.label.startsWith("preview-")) previewPage();
+else if (me.label.startsWith("docker-")) dockerPage();
+else if (me.label.startsWith("egg-")) eggPage();
 else if (me.label === "settings") settingsPage();
 else barPage();
 
@@ -108,8 +117,13 @@ function previewPage() {
     );
     return bar;
   };
+  // Rust shows the popup once the page has the cards (a kept popup is reused for the next app). Told right
+  // after the DOM is written, never from requestAnimationFrame: the popup is still hidden at that point and a
+  // hidden page gets no frames, so waiting for one meant most previews never showed at all (2026-11-13).
+  const drawn = () => invoke("preview_drawn");
   const show = (p: Preview | null) => {
-    if (!p) return;
+    if (!p) return void document.body.replaceChildren(); // emptied while hidden, for the next use
+    if (!document.body.children.length) replay(document.body, "preview-in"); // fresh, not an update
     document.body.replaceChildren(
       ...p.cards.map((c) => {
         const card = Object.assign(document.createElement("div"), { className: "card" });
@@ -137,6 +151,7 @@ function previewPage() {
         return card;
       }),
     );
+    drawn();
   };
   // Listen first: Rust may send the layout right after get_preview answered "nothing yet".
   me.listen<Preview>("preview", (e) => show(e.payload)).then(() => invoke<Preview | null>("get_preview").then(show));
@@ -171,6 +186,18 @@ function barPage() {
   };
   enter();
   me.listen("shown", enter);
+  // Auto-hide: the window slides (Rust); the contents settle in a short cascade on the way up and dip on the way down.
+  me.listen<{ show: boolean; ms: number }>("slide", (e) => {
+    const bar = document.querySelector<HTMLElement>(".bar")!;
+    bar.style.setProperty("--slide-ms", `${Math.max(e.payload.ms, 1)}ms`);
+    bar.classList.remove(e.payload.show ? "depart" : "arrive");
+    replay(bar, e.payload.show ? "arrive" : "depart");
+  });
+  // The dip outlasts the slide down a little (CSS), so it's undone only once the window is hidden; the bar never
+  // comes back dimmed, also when it is shown without a slide (settings changed, Pane shown again).
+  document.querySelector(".bar")!.addEventListener("animationend", (e) => {
+    if ((e as AnimationEvent).animationName === "let-go") document.querySelector(".bar")!.classList.remove("depart");
+  });
 
   const tick = () => {
     const now = new Date();
@@ -239,6 +266,14 @@ function barPage() {
     }, previewOpen ? 120 : 400);
   };
   me.listen("preview-closed", () => (previewOpen = false));
+  // Getting near the apps prepares a preview page, so the first preview doesn't wait for one to be built.
+  let warmed = 0;
+  $("apps").addEventListener("mouseenter", () => {
+    if (Date.now() - warmed > 30_000) {
+      warmed = Date.now();
+      invoke("warm_preview");
+    }
+  });
   const closePreview = () => {
     clearTimeout(hoverTimer);
     if (previewOpen) invoke("hide_preview");
@@ -257,10 +292,22 @@ function barPage() {
     invoke("open_overflow", { clientX: r.left + r.width / 2 });
   });
 
+  // --- Status icons (network, volume, battery) open Windows Quick Settings; music controls at the volume icon.
+  mountStatus($("status"));
+  const volume = $("status").querySelector<HTMLElement>(".vol-wrap")!;
+  mountMiniMedia(volume);
+
   // --- Now Playing (Spotify, browsers, any app using Windows media controls).
   mountMedia($("media"));
-  invoke<NowPlaying | null>("get_media").then((np) => renderMedia($("media"), np));
-  me.listen<NowPlaying | null>("media", (e) => renderMedia($("media"), e.payload));
+  let nowPlaying: NowPlaying | null = null;
+  const playing = (np: NowPlaying | null) => {
+    nowPlaying = np;
+    renderMedia($("media"), np);
+    renderMiniMedia(volume, np, settings?.volume_media ?? true);
+  };
+  onSettings = () => renderMiniMedia(volume, nowPlaying, settings?.volume_media ?? true);
+  invoke<NowPlaying | null>("get_media").then(playing);
+  me.listen<NowPlaying | null>("media", (e) => playing(e.payload));
 
   // --- Claude plan usage (5-hour and weekly limit); a click opens the usage page on claude.ai.
   invoke<ClaudeUsage | null>("get_claude").then((u) => renderClaude($("claude"), u));
@@ -273,17 +320,45 @@ function barPage() {
   me.listen<CodexUsage | null>("codex", (e) => renderCodex($("codex"), e.payload));
   $("codex").addEventListener("click", () => invoke($("codex").classList.contains("relogin") ? "open_codex_login" : "open_codex_usage"));
 
+  // --- Claude Code / Codex finished a task: a shine sweeps in from the left of its widget, and a soft glow stays
+  // on its left edge until the mouse comes by (or 10 minutes pass), so it's seen even if the bar was hidden.
+  const glowTimers = new Map<HTMLElement, number>();
+  me.listen<"claude" | "codex">("agent-done", (e) => {
+    const el = $(e.payload);
+    if (el.hidden) return;
+    el.classList.remove("seen");
+    replay(el, "done");
+    clearTimeout(glowTimers.get(el));
+    glowTimers.set(el, window.setTimeout(() => el.classList.remove("done"), 10 * 60_000));
+  });
+  for (const id of ["claude", "codex"]) {
+    const el = $(id);
+    el.addEventListener("mouseenter", () => {
+      if (!el.classList.contains("done")) return;
+      clearTimeout(glowTimers.get(el));
+      el.classList.add("seen");
+      el.addEventListener("animationend", () => el.classList.remove("done", "seen"), { once: true });
+    });
+  }
+
+  // --- Docker: running containers while Docker runs; a click shows them all in a popup.
+  invoke<Docker | null>("get_docker").then((d) => renderDocker($("docker"), d));
+  me.listen<Docker | null>("docker", (e) => renderDocker($("docker"), e.payload));
+  $("docker").addEventListener("click", () => {
+    const r = $("docker").getBoundingClientRect();
+    invoke("open_docker", { clientX: r.left + r.width / 2 });
+  });
+
   // --- Settings (right-click menu) and the adaptive colour of the apps above the bar.
   invoke<Settings>("get_settings").then(applySettings);
   me.listen<Settings>("settings", (e) => applySettings(e.payload));
   me.listen<[number, number, number][] | null>("tint", (e) => applyTint(settings?.adaptive_color || settings?.blend ? e.payload : null));
 
   // --- Weather under the time; a click opens the Windows Widgets board with the full forecast.
-  invoke<Weather | null>("get_weather").then((w) => renderWeather($("weather"), w));
-  me.listen<Weather | null>("weather", (e) => renderWeather($("weather"), e.payload));
+  invoke<WeatherReport | null>("get_weather").then((w) => renderWeather($("weather"), w));
+  me.listen<WeatherReport | null>("weather", (e) => renderWeather($("weather"), e.payload));
   $("weather").addEventListener("click", () => invoke("open_widgets"));
 
-  // --- Status icons (network, volume, battery) open Windows Quick Settings.
   invoke<Status>("get_status").then((s) => renderStatus($("status"), s));
   me.listen<Status>("status", (e) => renderStatus($("status"), e.payload));
 
@@ -315,16 +390,23 @@ function barPage() {
     closePreview();
     const id =(e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);
-    if (!app) return invoke("open_menu", { clientX: e.clientX });
+    if (!app) return invoke(knock() ? "open_egg" : "open_menu", { clientX: e.clientX });
+    // Auto-hide keeps the bar up while any menu is open (Rust sees the menu window), no hold needed here.
     const menu = await Menu.new({ items: appMenu(app) });
-    // Auto-hide must not slide the bar away while its menu is open.
-    await invoke("hold_bar", { on: true });
-    try {
-      await menu.popup();
-    } finally {
-      invoke("hold_bar", { on: false });
-    }
+    await menu.popup();
   });
+}
+
+/** Five right-clicks on an empty spot, each within 2 s of the last. */
+let knocks = 0;
+let lastKnock = 0;
+function knock(): boolean {
+  const now = Date.now();
+  knocks = now - lastKnock < 2000 ? knocks + 1 : 1;
+  lastKnock = now;
+  if (knocks < 5) return false;
+  knocks = 0;
+  return true;
 }
 
 /** Fills a (new or reused) app button with the app's current state. */
