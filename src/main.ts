@@ -5,6 +5,7 @@ import { mountStatus, renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
 import { mountMedia, mountMiniMedia, renderMedia, renderMiniMedia, type NowPlaying } from "./media";
 import { dockerPage, renderDocker, type Docker } from "./docker";
+import { eggPage } from "./egg";
 import { renderWeather, type Report as WeatherReport } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
@@ -67,6 +68,7 @@ if (me.label.startsWith("overflow-")) overflowPage();
 else if (me.label.startsWith("menu-")) menuPage();
 else if (me.label.startsWith("preview-")) previewPage();
 else if (me.label.startsWith("docker-")) dockerPage();
+else if (me.label.startsWith("egg-")) eggPage();
 else if (me.label === "settings") settingsPage();
 else barPage();
 
@@ -388,11 +390,23 @@ function barPage() {
     closePreview();
     const id =(e.target as HTMLElement).closest<HTMLElement>(".app")?.dataset.id;
     const app = apps.find((a) => a.id === id);
-    if (!app) return invoke("open_menu", { clientX: e.clientX });
+    if (!app) return invoke(knock() ? "open_egg" : "open_menu", { clientX: e.clientX });
     // Auto-hide keeps the bar up while any menu is open (Rust sees the menu window), no hold needed here.
     const menu = await Menu.new({ items: appMenu(app) });
     await menu.popup();
   });
+}
+
+/** Five right-clicks on an empty spot, each within 2 s of the last. */
+let knocks = 0;
+let lastKnock = 0;
+function knock(): boolean {
+  const now = Date.now();
+  knocks = now - lastKnock < 2000 ? knocks + 1 : 1;
+  lastKnock = now;
+  if (knocks < 5) return false;
+  knocks = 0;
+  return true;
 }
 
 /** Fills a (new or reused) app button with the app's current state. */

@@ -77,7 +77,7 @@ static POPUPS_OPEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static POPUPS_KEPT: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
 const KEEP: Duration = Duration::from_secs(120);
 /// The popup kinds a bar can have (label prefix).
-const POPUP_KINDS: [&str; 3] = ["overflow", "menu", "docker"];
+const POPUP_KINDS: [&str; 4] = ["overflow", "menu", "docker", "egg"];
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -1094,6 +1094,11 @@ async fn open_docker(app: AppHandle, window: WebviewWindow, client_x: f64) -> ta
     open_fitted(&app, format!("docker-{}", window.label()), client_x).await
 }
 
+#[tauri::command]
+async fn open_egg(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
+    open_fitted(&app, format!("egg-{}", window.label()), client_x).await
+}
+
 /// A popup page measured itself (CSS px): put it above its bar at the click, inside the monitor, and show it.
 #[tauri::command]
 async fn fit_popup(app: AppHandle, window: WebviewWindow, width: f64, height: f64, centered: bool) -> tauri::Result<()> {
@@ -1322,6 +1327,7 @@ fn main() {
             docker_action,
             open_docker,
             open_docker_desktop,
+            open_egg,
             report_bug,
             open_log_folder,
             get_downloads,
