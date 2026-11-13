@@ -248,12 +248,43 @@ pub fn list() -> Vec<TrayIcon> {
         icons.retain(|i| unsafe { IsWindow(Some(HWND(i.hwnd as _))) }.as_bool());
         icons.clone()
     };
-    let settings = settings();
+    let settings = cached_settings();
     icons
         .into_iter()
-        .filter(|i| !i.hidden)
+        .filter(|i| !i.hidden && !shown_by_pane(i.guid.as_deref()))
         .map(|i| TrayIcon { id: i.id(), promoted: promoted(&settings, &i), tip: i.tip, icon: i.png })
         .collect()
+}
+
+/// Windows' own volume, network and battery icons: Pane's status icons already show these on the bar, so in the
+/// tray they were only duplicates (asked 2026-11-13; Explorer also ignores clicks sent to them from outside, so
+/// they did nothing there). The shell registers them with GUIDs from one family — `7820AE73` volume,
+/// `…74` network, `…75` power, `…76`/`…77` the other status icons; `7820AE78` and up (Meet Now, Windows Update)
+/// are left alone.
+fn shown_by_pane(guid: Option<&str>) -> bool {
+    const FAMILY: &str = "-23E3-4229-82C1-E41CB67D5B9C";
+    guid.is_some_and(|g| {
+        let (head, tail) = g.split_at(g.len().min(8));
+        tail.eq_ignore_ascii_case(FAMILY)
+            && head.len() == 8
+            && head[..7].eq_ignore_ascii_case("7820AE7")
+            && (b'3'..=b'7').contains(&head.as_bytes()[7])
+    })
+}
+
+/// The registry's promoted/overflow list, read at most every 3 s: apps re-send their icons often (animated
+/// icons many times a second) and each send listed the icons, which read ~40 registry keys every time.
+fn cached_settings() -> Vec<Setting> {
+    static CACHE: Mutex<Option<(std::time::Instant, Vec<Setting>)>> = Mutex::new(None);
+    let mut cache = lock(&CACHE);
+    match cache.as_ref() {
+        Some((at, s)) if at.elapsed() < std::time::Duration::from_secs(3) => s.clone(),
+        _ => {
+            let now = settings();
+            *cache = Some((std::time::Instant::now(), now.clone()));
+            now
+        }
+    }
 }
 
 /// Sends the click to the icon's app the way Explorer does, so its own menu or window opens.
@@ -502,7 +533,7 @@ fn icon_rgba(mut px: Vec<u8>, mask: Option<&[u8]>) -> Vec<u8> {
 // ---- promoted (shown on the bar) or overflow ----
 
 /// One entry of HKCU\Control Panel\NotifyIconSettings, where Windows 11 keeps each icon's "show in taskbar" switch.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Setting {
     exe: String,
     uid: Option<u32>,
@@ -658,6 +689,16 @@ mod tests {
         let mask = [0, 0, 0, 0, 255, 255, 255, 0];
         assert_eq!(icon_rgba(px, Some(&mask)), [3, 2, 1, 255, 6, 5, 4, 0]);
         assert_eq!(icon_rgba(vec![1, 2, 3, 128], None), [3, 2, 1, 128]); // straight alpha kept
+    }
+
+    #[test]
+    fn only_the_status_icons_pane_draws_itself_are_left_out() {
+        assert!(shown_by_pane(Some("7820AE73-23E3-4229-82C1-E41CB67D5B9C")), "volume");
+        assert!(shown_by_pane(Some("7820ae75-23e3-4229-82c1-e41cb67d5b9c")), "power, any case");
+        assert!(!shown_by_pane(Some("7820AE78-23E3-4229-82C1-E41CB67D5B9C")), "another shell icon stays");
+        assert!(!shown_by_pane(Some("7820AE81-23E3-4229-82C1-E41CB67D5B9C")), "Windows Update stays");
+        assert!(!shown_by_pane(Some("BA82E2DC-F405-47AD-B032-CF0FAA0E3933")), "Windows Security stays");
+        assert!(!shown_by_pane(Some("7820AE73")) && !shown_by_pane(None));
     }
 
     #[test]

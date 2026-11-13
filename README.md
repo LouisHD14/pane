@@ -7,17 +7,19 @@ Pane replaces the Windows 11 taskbar with a glass bar that keeps everything the 
 ## Features
 - **Start:** the Windows button opens the real Start menu.
 - **Pinned and running apps:** your Windows taskbar pins, then open apps, centered like Windows 11. Click to start, bring to front or minimize. Right-click for the app's windows, "New window" and "Close". Pin new apps from the Start menu (right-click > "Pin to taskbar").
-- **Tray icons:** the icons Windows shows on the taskbar, the rest behind the ^ arrow. Click and right-click work as usual. Which icons are visible follows Windows Settings > Personalization > Taskbar > Other system tray icons.
+- **Tray icons:** the icons Windows shows on the taskbar, the rest behind the ^ arrow. Click and right-click work as usual. Which icons are visible follows Windows Settings > Personalization > Taskbar > Other system tray icons. Windows' own volume, network and battery icons are left out: Pane shows those itself.
 - **Media:** cover, title, artist and play/pause/next for Spotify, YouTube in the browser, or any app that uses the Windows media controls.
-- **Claude usage:** your 5-hour and weekly Claude limits with reset times, from Claude Code's login on this PC. Click for the usage page.
+- **Claude usage:** your 5-hour and weekly Claude limits with reset times, from Claude Code's login on this PC. Click for the usage page. When Claude Code finishes a task, an orange glow lights up on the widget's left edge (blue for Codex) until you move the mouse over it.
 - **Codex usage:** the same for Codex (ChatGPT plan), from the Codex CLI's login. Right-click the bar > "Add Codex login…" to log in.
 - **CPU / GPU / RAM:** small meters with the same numbers as Task Manager. Click for Task Manager.
 - **Network:** download and upload speed (hidden on narrow screens).
-- **Weather:** temperature and an icon under the clock, from your Windows location and Open-Meteo. Location must be allowed for desktop apps (Settings > Privacy & security > Location).
-- **Date and time:** click for notifications and the calendar. The network and volume icons open Quick Settings and the volume mixer.
-- **Auto-hide:** the bar can float over apps and slide away; touch the bottom edge to bring it back.
+- **Weather:** temperature and an icon under the clock, from your Windows location and Open-Meteo. When it cannot be read (offline, location off), a dim placeholder says so instead of disappearing. Location must be allowed for desktop apps (Settings > Privacy & security > Location).
+- **Docker:** while Docker runs, the number of running containers; click for every container with its state, ports and start / stop / restart. Hidden when Docker isn't running.
+- **Date and time:** click for notifications and the calendar. The network and volume icons open Quick Settings and the volume mixer. While music plays, small play/pause/next controls pop out of the volume icon on hover.
+- **Auto-hide:** the bar can float over apps and slide away; touch the bottom edge to bring it back. It stays up while any menu is open. How long it stays after the mouse leaves and how fast it slides are in the settings window.
 - **Adaptive colour:** the bar can match the colour of the apps above it.
-- **Settings:** right-click the bar > Settings for the quick switches (auto-hide, adaptive colour, each widget); "More settings…" opens the settings window, which also has glass lightness, bar height (small / normal / large) and the auto-hide timing.
+- **Settings:** right-click the bar > Settings, which holds three short pages - Bar (auto-hide, fill, adaptive colour), Widgets (Now Playing, Claude, Codex, system load, weather, Docker) and "Show on the bar" (Start, tray, network, volume, battery, time, date); "More settings…" opens the settings window, which also has glass lightness, bar height (small / normal / large) and the auto-hide timing. "Report a bug…" opens a GitHub issue with Pane's version filled in.
+- **Starts with Windows:** on from the first start, so Pane is there after a restart. Switch it off in Pane (right-click > Settings) or in Task Manager > Startup apps; both show the same state.
 - **Auto-update:** Pane checks GitHub Releases for new versions. A new one shows an "Update x.y.z" pill; click it to install.
 - **Every monitor:** one bar per monitor, each with its own windows. Pane hides on a monitor where a fullscreen app or game is in front.
 
@@ -50,6 +52,9 @@ The normal taskbar always comes back.
 - These logins are only sent to Anthropic (`api.anthropic.com`, `platform.claude.com`) and OpenAI (`chatgpt.com`, `auth.openai.com`) to read your usage. When a login has expired, Pane renews it the same way the CLI does and saves it back to the same file.
 - Weather uses your rounded location and asks [Open-Meteo](https://open-meteo.com). No key, no account.
 - Updates are checked on GitHub.
+- The "done" glow reads the end of Claude Code's and Codex's conversation files on your PC (`~/.claude/projects`, `~/.codex/sessions`) when they change. Nothing from them is sent or logged.
+- The Docker widget talks to Docker's local pipe only.
+- "Report a bug…" opens GitHub in your browser with Pane's version and the Windows build; nothing is sent until you submit it there.
 - Nothing else leaves your PC. Settings and logs stay in `%LOCALAPPDATA%\org.gruening.pane`.
 
 ## Build from source

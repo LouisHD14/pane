@@ -58,6 +58,66 @@ export function renderMedia(box: HTMLElement, np: NowPlaying | null) {
   if (np.playing && np.duration_ms) timer = window.setInterval(() => drawProgress(box), 1000);
 }
 
+/** The small play/pause/next pill that slides out of the volume icon while music plays (setting
+ * "volume_media"). It opens on hover over the icon and stays while the mouse is on it. */
+export function mountMiniMedia(wrap: HTMLElement) {
+  const pill = document.createElement("div");
+  pill.className = "mini-media";
+  pill.setAttribute("role", "toolbar");
+  pill.setAttribute("aria-label", "Music");
+  pill.innerHTML = `
+    <button data-action="previous" aria-label="Previous" tabindex="-1">${PREV}</button>
+    <button data-action="toggle" class="toggle" aria-label="Play or pause" tabindex="-1">${PLAY}</button>
+    <button data-action="next" aria-label="Next" tabindex="-1">${NEXT}</button>`;
+  pill.querySelectorAll<HTMLButtonElement>("button").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation(); // not the volume mixer behind it
+      invoke("media_control", { action: b.dataset.action });
+    }),
+  );
+  wrap.append(pill);
+  let timer = 0;
+  const open = (on: boolean) => {
+    clearTimeout(timer);
+    if (on && !wrap.classList.contains("music")) return;
+    wrap.classList.toggle("open", on);
+    pill.querySelectorAll("button").forEach((b) => (b.tabIndex = on ? 0 : -1));
+  };
+  wrap.addEventListener("mouseenter", () => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => open(true), 120); // not on a quick pass over the icon
+  });
+  wrap.addEventListener("mouseleave", () => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => open(false), 350);
+  });
+  wrap.addEventListener("focusin", () => open(true));
+  wrap.addEventListener("focusout", (e) => !wrap.contains(e.relatedTarget as Node) && open(false));
+}
+
+let miniTrack = "";
+
+export function renderMiniMedia(wrap: HTMLElement, np: NowPlaying | null, on: boolean) {
+  const music = !!np && on;
+  wrap.classList.toggle("music", music);
+  wrap.classList.toggle("playing", music && np!.playing);
+  if (!music) {
+    wrap.classList.remove("open");
+    miniTrack = "";
+    return;
+  }
+  const toggle = wrap.querySelector(".mini-media .toggle")!;
+  toggle.innerHTML = np!.playing ? PAUSE : PLAY;
+  toggle.setAttribute("aria-label", np!.playing ? "Pause" : "Play");
+  const track = `${np!.title}\u0000${np!.artist}`;
+  // A new song: peek out for a moment, so the controls are found (not when the mouse is on them).
+  if (miniTrack && track !== miniTrack && np!.playing && !wrap.matches(":hover")) {
+    wrap.classList.add("open");
+    window.setTimeout(() => !wrap.matches(":hover") && wrap.classList.remove("open"), 2200);
+  }
+  miniTrack = track;
+}
+
 function drawProgress(box: HTMLElement) {
   if (!current?.duration_ms) {
     box.querySelector<HTMLElement>(".progress")!.hidden = true;

@@ -42,14 +42,28 @@ function batteryIcon(b: NonNullable<Status["battery"]>): [string, string] {
   return [svg(body + bolt), `Battery ${b.percent} %${b.charging ? ", charging" : ""}`];
 }
 
-/** One button per icon: volume opens the per-app volume mixer, the others Quick Settings (`data-open`). */
+/** Builds the three buttons once (volume in a wrapper that also holds the mini music controls, see
+ * mountMiniMedia); renderStatus only fills them in. Volume opens the per-app volume mixer, the others
+ * Quick Settings (`data-open`). */
+export function mountStatus(el: HTMLElement) {
+  el.innerHTML = `
+    <button class="st-network" data-open="quick-settings"></button>
+    <span class="vol-wrap"><button class="st-volume" data-open="volume-mixer"></button></span>
+    <button class="st-battery" data-open="quick-settings" hidden></button>`;
+}
+
 export function renderStatus(el: HTMLElement, s: Status) {
-  const parts: [[string, string], string][] = [
-    [networkIcon(s), "quick-settings"],
-    [volumeIcon(s), "volume-mixer"],
-    ...(s.battery ? [[batteryIcon(s.battery), "quick-settings"] as [[string, string], string]] : []),
-  ];
-  el.innerHTML = parts
-    .map(([[icon, label], open]) => `<button data-open="${open}" title="${label}" aria-label="${label}">${icon}</button>`)
-    .join("");
+  const fill = (sel: string, [icon, label]: [string, string]) => {
+    const b = el.querySelector<HTMLElement>(sel)!;
+    if (b.dataset.icon !== icon) {
+      b.innerHTML = icon;
+      b.dataset.icon = icon;
+    }
+    b.title = label;
+    b.setAttribute("aria-label", label);
+  };
+  fill(".st-network", networkIcon(s));
+  fill(".st-volume", volumeIcon(s));
+  el.querySelector<HTMLElement>(".st-battery")!.hidden = !s.battery;
+  if (s.battery) fill(".st-battery", batteryIcon(s.battery));
 }

@@ -30,6 +30,23 @@ pub struct Settings {
     pub show_codex: bool,
     pub show_usage: bool,
     pub show_weather: bool,
+    /// Running Docker containers (only shown while Docker runs).
+    pub show_docker: bool,
+    // Bar elements the user can switch off ("Elements" in the settings).
+    pub show_start: bool,
+    pub show_tray: bool,
+    pub show_network: bool,
+    pub show_volume: bool,
+    pub show_battery: bool,
+    pub show_clock: bool,
+    pub show_date: bool,
+    /// A short orange (Claude) / blue (Codex) glow on the usage widget when Claude Code or Codex finished a task.
+    pub done_glow: bool,
+    /// Small play/pause/next controls that slide out of the volume icon while music plays.
+    pub volume_media: bool,
+    /// Whether Pane has already set "Start with Windows" once. New installs start with it on (asked
+    /// 2026-11-13); after that the user decides, in Pane or in Task Manager, and Pane never forces it again.
+    pub autostart_set: bool,
     /// The user's own order of the pinned apps (app ids), set by dragging them in the bar. Only Pane's order:
     /// Windows' own taskbar pins stay as they are. Empty: Windows' pin order.
     pub pin_order: Vec<String>,
@@ -65,7 +82,7 @@ impl Size {
 
 const GLASS_MAX: f64 = 100.0;
 const HIDE_DELAY: (f64, f64) = (100.0, 3000.0);
-const SLIDE: (f64, f64) = (0.0, 400.0);
+const SLIDE: (f64, f64) = (0.0, 600.0);
 
 impl Default for Settings {
     fn default() -> Self {
@@ -81,10 +98,22 @@ impl Default for Settings {
             show_codex: true,
             show_usage: true,
             show_weather: true,
+            show_docker: true,
+            show_start: true,
+            show_tray: true,
+            show_network: true,
+            show_volume: true,
+            show_battery: true,
+            show_clock: true,
+            show_date: true,
+            done_glow: true,
+            volume_media: true,
+            autostart_set: false,
             pin_order: Vec::new(),
             glass: 50,
             hide_delay_ms: 700,
-            slide_ms: 120,
+            // With the overshoot and settle (main.rs `slide`); 120 ms was a plain slide.
+            slide_ms: 260,
             size: Size::Normal,
         }
     }
@@ -104,6 +133,17 @@ impl Settings {
             "show_codex" => &mut self.show_codex,
             "show_usage" => &mut self.show_usage,
             "show_weather" => &mut self.show_weather,
+            "show_docker" => &mut self.show_docker,
+            "show_start" => &mut self.show_start,
+            "show_tray" => &mut self.show_tray,
+            "show_network" => &mut self.show_network,
+            "show_volume" => &mut self.show_volume,
+            "show_battery" => &mut self.show_battery,
+            "show_clock" => &mut self.show_clock,
+            "show_date" => &mut self.show_date,
+            "done_glow" => &mut self.done_glow,
+            "volume_media" => &mut self.volume_media,
+            "autostart_set" => &mut self.autostart_set,
             _ => return None,
         })
     }
@@ -188,8 +228,9 @@ mod tests {
     #[test]
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
-        assert!(s.autohide && s.show_media && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
-        assert_eq!((s.glass, s.hide_delay_ms, s.slide_ms, s.size), (50, 700, 120, Size::Normal));
+        assert!(!s.autostart_set, "an old file hasn't been asked about autostart yet");
+        assert!(s.autohide && s.show_media && s.show_docker && s.show_start && s.done_glow && s.volume_media && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
+        assert_eq!((s.glass, s.hide_delay_ms, s.slide_ms, s.size), (50, 700, 260, Size::Normal));
     }
 
     #[test]
@@ -208,7 +249,7 @@ mod tests {
         assert!(s.apply("glass", &json!(-4)).is_some() && s.glass == 0);
         assert!(s.apply("glass", &json!(33.6)).is_some() && s.glass == 34);
         assert!(s.apply("hide_delay_ms", &json!(0)).is_some() && s.hide_delay_ms == 100);
-        assert!(s.apply("slide_ms", &json!(99999)).is_some() && s.slide_ms == 400);
+        assert!(s.apply("slide_ms", &json!(99999)).is_some() && s.slide_ms == 600);
         assert!(s.apply("size", &json!("large")).is_some() && s.size == Size::Large);
         assert!(s.apply("size", &json!("huge")).is_none() && s.size == Size::Large);
         assert!(s.apply("autohide", &json!(true)).is_some() && s.autohide);
@@ -217,6 +258,6 @@ mod tests {
         assert!(s.apply("nope", &json!(true)).is_none());
         let edited: Settings = serde_json::from_str(r#"{"glass":200,"hide_delay_ms":5,"slide_ms":5000}"#).unwrap();
         let edited = edited.clamped();
-        assert_eq!((edited.glass, edited.hide_delay_ms, edited.slide_ms), (100, 100, 400));
+        assert_eq!((edited.glass, edited.hide_delay_ms, edited.slide_ms), (100, 100, 600));
     }
 }

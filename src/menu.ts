@@ -17,6 +17,16 @@ export type Settings = {
   show_codex: boolean;
   show_usage: boolean;
   show_weather: boolean;
+  show_docker: boolean;
+  show_start: boolean;
+  show_tray: boolean;
+  show_network: boolean;
+  show_volume: boolean;
+  show_battery: boolean;
+  show_clock: boolean;
+  show_date: boolean;
+  done_glow: boolean;
+  volume_media: boolean;
   /** Glass lightness 0 (dark) ..= 100 (light), 50 = the original look. */
   glass: number;
   hide_delay_ms: number;
@@ -42,11 +52,17 @@ export async function menuPage() {
   list.setAttribute("aria-label", "Pane");
   document.body.replaceChildren(list);
   window.addEventListener("blur", close);
-  // Main page, or the Settings page opened from it (same popup, so it stays one window).
-  let page: "main" | "settings" = "main";
-  let go = (_: "main" | "settings") => {};
+  // One popup, several pages: the main page, Settings, and a page per group of switches. Each page says where
+  // its "Back" goes (PARENT), so Escape and Back always walk the same way out.
+  type Page = "main" | "settings" | "bar" | "widgets" | "elements";
+  const PARENT: Record<Page, Page | null> = { main: null, settings: "main", bar: "settings", widgets: "settings", elements: "settings" };
+  let page: Page = "main";
+  let go = (_: Page) => {};
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") return page === "settings" ? go("main") : close();
+    if (e.key === "Escape") {
+      const up = PARENT[page];
+      return up ? go(up) : close();
+    }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
     const items = [...list.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
@@ -56,13 +72,15 @@ export async function menuPage() {
   });
 
   try {
-    let [s, auto, codexIn, claude, codex] = await Promise.all([
-      invoke<Settings>("get_settings"),
-      invoke<boolean>("autostart"),
-      invoke<boolean>("codex_logged_in"),
-      invoke<ClaudeUsage | null>("get_claude"),
-      invoke<CodexUsage | null>("get_codex"),
-    ]);
+    const load = () =>
+      Promise.all([
+        invoke<Settings>("get_settings"),
+        invoke<boolean>("autostart"),
+        invoke<boolean>("codex_logged_in"),
+        invoke<ClaudeUsage | null>("get_claude"),
+        invoke<CodexUsage | null>("get_codex"),
+      ]);
+    let [s, auto, codexIn, claude, codex] = await load();
     const checkUpdate = async () => {
       update = { text: "Checking…", disabled: true, run: () => {} };
       render();
@@ -79,23 +97,16 @@ export async function menuPage() {
       checked: s[key],
       run: () => invoke("set_setting", { key, value: !s[key] }), // the "settings" event redraws the menu
     });
+    const back = (): Entry => ({ text: "Back", run: () => go(PARENT[page] ?? "main"), stay: true });
+    // Three short pages instead of one long list: how the bar behaves, which widgets it carries, and which of
+    // the standard parts it shows.
     const settingsPage = (): Entry[] => [
-      { text: "Back", run: () => go("main"), stay: true },
+      back(),
       "-",
-      { heading: "Bar" },
-      flip("autohide", "Auto-hide the bar"),
-      flip("fill", "Fill the screen edge"),
-      flip("adaptive_color", "Match the colour of apps"),
-      flip("blend", "App colour under the bar"),
-      flip("all_monitors", "Show apps from all monitors"),
+      { text: "Bar", run: () => go("bar"), stay: true, more: true },
+      { text: "Widgets", run: () => go("widgets"), stay: true, more: true },
+      { text: "Show on the bar", run: () => go("elements"), stay: true, more: true },
       "-",
-      flip("show_media", "Show Now Playing"),
-      flip("show_claude", "Show Claude usage"),
-      flip("show_codex", "Show Codex usage"),
-      flip("show_usage", "Show CPU / GPU / RAM"),
-      flip("show_weather", "Show weather"),
-      "-",
-      { heading: "Windows" },
       {
         text: "Start with Windows",
         checked: auto,
@@ -107,7 +118,51 @@ export async function menuPage() {
       },
       "-",
       { text: "More settings…", run: () => invoke("open_settings") },
+      { text: "Report a bug…", run: () => invoke("report_bug") },
     ];
+    const barPage = (): Entry[] => [
+      back(),
+      "-",
+      { heading: "Bar" },
+      flip("autohide", "Auto-hide the bar"),
+      flip("fill", "Fill the screen edge"),
+      flip("adaptive_color", "Match the colour of apps"),
+      flip("blend", "App colour under the bar"),
+      flip("all_monitors", "Show apps from all monitors"),
+    ];
+    const widgetsPage = (): Entry[] => [
+      back(),
+      "-",
+      { heading: "Widgets" },
+      flip("show_media", "Now Playing"),
+      flip("show_claude", "Claude usage"),
+      flip("show_codex", "Codex usage"),
+      flip("show_usage", "CPU / GPU / RAM"),
+      flip("show_weather", "Weather"),
+      flip("show_docker", "Docker (while it runs)"),
+      "-",
+      flip("volume_media", "Music controls at the volume icon"),
+      flip("done_glow", "Glow when Claude / Codex finish"),
+    ];
+    const elementsPage = (): Entry[] => [
+      back(),
+      "-",
+      { heading: "Show on the bar" },
+      flip("show_start", "Start button"),
+      flip("show_tray", "Tray icons"),
+      flip("show_network", "Network"),
+      flip("show_volume", "Volume"),
+      flip("show_battery", "Battery"),
+      flip("show_clock", "Time"),
+      flip("show_date", "Date"),
+    ];
+    const PAGES: Record<Page, () => Entry[]> = {
+      main: () => mainPage(),
+      settings: settingsPage,
+      bar: barPage,
+      widgets: widgetsPage,
+      elements: elementsPage,
+    };
     const mainPage = (): Entry[] => [
       { text: "Settings", run: () => go("settings"), stay: true, more: true },
       update,
@@ -124,7 +179,7 @@ export async function menuPage() {
     const render = () => {
       const focused = [...list.querySelectorAll("button")].indexOf(document.activeElement as HTMLButtonElement);
       list.replaceChildren(
-        ...(page === "main" ? mainPage() : settingsPage()).map((e) => {
+        ...PAGES[page]().map((e) => {
           if (e === "-") return Object.assign(document.createElement("div"), { className: "menu-sep", role: "separator" });
           if ("heading" in e) return Object.assign(document.createElement("div"), { className: "menu-heading", textContent: e.heading });
           const b = Object.assign(document.createElement("button"), { className: "menu-item", disabled: !!e.disabled });
@@ -158,7 +213,7 @@ export async function menuPage() {
     });
     // Layout sizes, not the drawn box: the opening animation starts at 80 % scale (which made the first
     // open too narrow), and the list may be cut to the window and scroll (see .menu).
-    const fit = () => invoke("fit_menu", { width: list.offsetWidth, height: list.scrollHeight });
+    const fit = () => invoke("fit_popup", { width: list.offsetWidth, height: list.scrollHeight, centered: false });
     go = async (to) => {
       page = to;
       list.scrollTop = 0;
@@ -166,6 +221,20 @@ export async function menuPage() {
       await fit();
       list.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
     };
+    // A kept menu is opened again (Rust hides menus instead of destroying them, so they open at once):
+    // start on the main page with fresh state and play the opening animation again.
+    me.listen("popup-open", async () => {
+      try {
+        [s, auto, codexIn, claude, codex] = await load();
+        update = { text: "Check for updates", run: checkUpdate, stay: true };
+        list.style.animation = "none";
+        void list.offsetWidth;
+        list.style.animation = "";
+        await go("main");
+      } catch {
+        close();
+      }
+    });
     render();
     await fit();
   } catch {

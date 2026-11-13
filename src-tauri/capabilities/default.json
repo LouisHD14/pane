@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the bar, popup and settings windows may use: the app context menu and Pane's own commands.",
-  "windows": ["bar-*", "overflow-*", "menu-*", "preview-*", "settings"],
+  "windows": ["bar-*", "overflow-*", "menu-*", "preview-*", "docker-*", "settings"],
   "permissions": ["core:default"]
 }

@@ -42,6 +42,8 @@ enum Cmd {
     Apps { bar: String, apps: Vec<AppItem> },
     Ready(String),
     Hide,
+    /// The mouse is over the apps: build a hidden spare popup now, so the first preview opens at once.
+    Warm,
 }
 
 static TX: OnceLock<Mutex<Sender<Cmd>>> = OnceLock::new();
@@ -56,15 +58,17 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 const POLL: Duration = Duration::from_millis(50);
 const GRACE: Duration = Duration::from_millis(300);
 
-// Layout in CSS px (the page draws the same boxes).
-const PAD: f64 = 8.0;
-const GAP: f64 = 8.0;
+// Layout in CSS px (the page draws the same boxes). Tight margins, so the popup is mostly window image
+// (the user, 2026-11-13: the old 8 px everywhere plus a 22 px title left huge borders around each thumbnail).
+const PAD: f64 = 5.0;
+const GAP: f64 = 6.0;
 const CARD_W: f64 = 216.0;
-const INNER: f64 = 8.0;
-const TITLE_H: f64 = 22.0;
-const THUMB_H: f64 = 124.0;
+const INNER: f64 = 4.0;
+const TITLE_H: f64 = 18.0;
+/// 16:9 of the image box (CARD_W - 2 x INNER), so a maximized window fills it with no bars above and below.
+const THUMB_H: f64 = (CARD_W - 2.0 * INNER) * 9.0 / 16.0;
 /// Row under the image for thumbnail toolbar buttons, only when a window has some.
-const BAR_H: f64 = 32.0;
+const BAR_H: f64 = 28.0;
 
 pub fn start(app: AppHandle) {
     let (tx, rx) = channel();
@@ -81,6 +85,11 @@ fn send(cmd: Cmd) {
 
 pub fn show(bar: WebviewWindow, monitor: RECT, app: AppItem, left: f64, right: f64) {
     send(Cmd::Show { bar, monitor, app, left, right });
+}
+
+/// Builds the spare popup ahead of the first hover (no-op when there is one, or in "Low memory mode").
+pub fn warm() {
+    send(Cmd::Warm);
 }
 
 /// Always sent (cheap): a Show still queued must not open after this.
@@ -100,11 +109,15 @@ pub fn is_open() -> bool {
     OPEN.load(SeqCst)
 }
 
-/// The popup's page has loaded and asks what to show; it is made visible now, so it never flashes empty.
-pub fn ready(label: &str) -> Option<Preview> {
-    send(Cmd::Ready(label.to_string()));
+/// The popup's page has loaded and asks what to show.
+pub fn current(label: &str) -> Option<Preview> {
     let showing = SHOWING.lock().unwrap_or_else(|e| e.into_inner());
     showing.as_ref().filter(|(l, _)| l == label).map(|(_, p)| p.clone())
+}
+
+/// The page has drawn what it was sent: the popup is made visible now, so it never flashes empty or stale.
+pub fn drawn(label: &str) {
+    send(Cmd::Ready(label.to_string()));
 }
 
 struct Open {
@@ -123,33 +136,66 @@ struct Open {
     anchor: RECT,
     rect: RECT,
     away_since: Option<Instant>,
+    /// When the cards were last sent, so a popup still hidden a moment later is shown anyway.
+    placed: Instant,
+}
+
+/// After this, a placed popup is shown even though its page never said it had drawn the cards: a preview that
+/// doesn't appear is worse than one that appears a frame early.
+const REVEAL_ANYWAY: Duration = Duration::from_millis(700);
+
+/// A closed popup is kept hidden this long for the next preview (a new page takes a few hundred ms to build,
+/// on slower PCs much more, which made previews feel slow); then it's destroyed (a hidden page holds ~30 MB).
+const KEEP: Duration = Duration::from_secs(120);
+
+/// The hidden popup kept for the next preview, and since when it is unused.
+struct Spare {
+    popup: WebviewWindow,
+    since: Instant,
 }
 
 fn run(app: AppHandle, rx: Receiver<Cmd>) {
     let mut open: Option<Open> = None;
+    let mut spare: Option<Spare> = None;
     loop {
-        let cmd = if open.is_some() {
-            match rx.recv_timeout(POLL) {
+        // While open: follow the cursor. Idle with a spare: wake up now and then to drop it once unused for long.
+        let wait = if open.is_some() { Some(POLL) } else if spare.is_some() { Some(Duration::from_secs(5)) } else { None };
+        let cmd = match wait {
+            Some(wait) => match rx.recv_timeout(wait) {
                 Ok(c) => Some(c),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => return,
-            }
-        } else {
-            match rx.recv() {
+            },
+            None => match rx.recv() {
                 Ok(c) => Some(c),
                 Err(_) => return,
-            }
+            },
         };
+        if open.is_none() && spare.as_ref().is_some_and(|s| s.since.elapsed() > KEEP) {
+            if let Some(s) = spare.take() {
+                let _ = s.popup.destroy();
+            }
+        }
         match cmd {
             Some(Cmd::Show { bar, monitor, app: item, left, right }) => {
                 // Same bar: reuse the popup (no new page). Another bar may have another DPI: start over.
                 let reuse = open.take_if(|o| o.bar.label() == bar.label());
-                close(&app, open.take());
+                close(&app, open.take(), &mut spare);
                 open = match reuse {
                     // Hovered the same icon again: already showing it.
                     Some(o) if o.app == item && o.left == left => Some(o),
-                    reuse => place(&app, reuse, bar, monitor, item, left, right),
+                    reuse => place(&app, reuse, &mut spare, bar, monitor, item, left, right),
                 };
+            }
+            Some(Cmd::Warm) => {
+                if open.is_none() && spare.is_none() && !crate::settings::get().low_memory {
+                    match create(&app) {
+                        Ok(popup) => spare = Some(Spare { popup, since: Instant::now() }),
+                        Err(e) => crate::win::log(&format!("can't prepare the preview: {e}")),
+                    }
+                } else if let Some(s) = spare.as_mut() {
+                    s.since = Instant::now();
+                }
             }
             Some(Cmd::Apps { bar, apps }) => {
                 if let Some(o) = open.take_if(|o| o.bar.label() == bar) {
@@ -157,9 +203,9 @@ fn run(app: AppHandle, rx: Receiver<Cmd>) {
                         Some(a) if same_cards(&a.windows, &o.app.windows) => open = Some(o),
                         Some(a) => {
                             let (bar, monitor, left, right) = (o.bar.clone(), o.monitor, o.left, o.right);
-                            open = place(&app, Some(o), bar, monitor, a, left, right);
+                            open = place(&app, Some(o), &mut spare, bar, monitor, a, left, right);
                         }
-                        None => close(&app, Some(o)),
+                        None => close(&app, Some(o), &mut spare),
                     }
                 }
             }
@@ -169,15 +215,19 @@ fn run(app: AppHandle, rx: Receiver<Cmd>) {
                     reveal(o);
                 }
             }
-            Some(Cmd::Hide) => close(&app, open.take()),
+            Some(Cmd::Hide) => close(&app, open.take(), &mut spare),
             None => {}
         }
         if let Some(o) = open.as_mut() {
+            if !o.visible && o.placed.elapsed() > REVEAL_ANYWAY {
+                o.ready = true;
+                reveal(o);
+            }
             let here = crate::win::cursor().is_some_and(|p| inside(p, o.anchor, o.rect));
             if here {
                 o.away_since = None;
             } else if o.away_since.get_or_insert_with(Instant::now).elapsed() > GRACE {
-                close(&app, open.take());
+                close(&app, open.take(), &mut spare);
             }
         }
         OPEN.store(open.is_some(), SeqCst);
@@ -185,9 +235,11 @@ fn run(app: AppHandle, rx: Receiver<Cmd>) {
 }
 
 /// Shows (or updates) the popup for `item` above its icon. None if there is nothing to show.
+#[allow(clippy::too_many_arguments)]
 fn place(
     app: &AppHandle,
     reuse: Option<Open>,
+    spare: &mut Option<Spare>,
     bar: WebviewWindow,
     monitor: RECT,
     item: AppItem,
@@ -195,13 +247,14 @@ fn place(
     right: f64,
 ) -> Option<Open> {
     if item.windows.is_empty() {
-        close(app, reuse);
+        close(app, reuse, spare);
         return None;
     }
     let mut o = match reuse {
         Some(o) => o,
         None => {
-            let popup = match create(app) {
+            // The kept page (already loaded) if there is one: it shows itself once it drew the new cards.
+            let popup = match spare.take().map(|s| Ok(s.popup)).unwrap_or_else(|| create(app)) {
                 Ok(p) => p,
                 Err(e) => {
                     crate::win::log(&format!("can't open the preview: {e}"));
@@ -221,11 +274,12 @@ fn place(
                 anchor: RECT::default(),
                 rect: RECT::default(),
                 away_since: None,
+                placed: Instant::now(),
             }
         }
     };
     let (Ok(dest), Ok(bar_pos), Ok(bar_size)) = (o.popup.hwnd(), bar.outer_position(), bar.outer_size()) else {
-        close(app, Some(o));
+        close(app, Some(o), spare);
         return None;
     };
     let dest = HWND(dest.0);
@@ -306,6 +360,7 @@ fn place(
     let _ = app.emit_to(label.as_str(), "preview", &preview);
     (o.bar, o.monitor, o.app, o.left, o.right) = (bar, monitor, item, left, right);
     (o.anchor, o.rect, o.away_since) = (anchor, RECT { left: x, top: y, right: x + pw, bottom: y + ph }, None);
+    o.placed = Instant::now();
     reveal(&mut o);
     Some(o)
 }
@@ -314,7 +369,7 @@ fn place(
 fn reveal(o: &mut Open) {
     if o.ready && !o.visible {
         if let Ok(h) = o.popup.hwnd() {
-            crate::win::show_inactive(HWND(h.0));
+            crate::win::show_async(HWND(h.0), true);
             o.visible = true;
         }
     }
@@ -338,11 +393,21 @@ fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     Ok(popup)
 }
 
-/// Thumbnails off, popup gone (destroyed, not hidden: a hidden page keeps ~30 MB, like the tray popup).
-fn close(app: &AppHandle, open: Option<Open>) {
+/// Thumbnails off, popup hidden and kept as the spare for the next preview (destroyed in "Low memory mode", or
+/// when there is a spare already).
+fn close(app: &AppHandle, open: Option<Open>, spare: &mut Option<Spare>) {
     let Some(mut o) = open else { return };
     unregister(&mut o.thumbs);
-    let _ = o.popup.destroy();
+    if let Ok(h) = o.popup.hwnd() {
+        crate::win::show_async(HWND(h.0), false);
+    }
+    if spare.is_none() && !crate::settings::get().low_memory {
+        // Emptied while hidden, so it never shows the last app's cards when it's used again.
+        let _ = app.emit_to(o.popup.label(), "preview", None::<Preview>);
+        *spare = Some(Spare { popup: o.popup, since: Instant::now() });
+    } else {
+        let _ = o.popup.destroy();
+    }
     *SHOWING.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let _ = app.emit_to(o.bar.label(), "preview-closed", ());
 }
@@ -421,9 +486,10 @@ mod tests {
         assert_eq!((w, h), (2.0 * PAD + 2.0 * CARD_W + GAP, 2.0 * PAD + 2.0 * INNER + TITLE_H + THUMB_H));
         assert_eq!(slots[0].bar[3], 0.0, "no toolbar row");
         // 16:9 in a 200 x 124 box: full width, centred vertically.
+        // 16:9 in the 16:9 image box: it fills it exactly, no dead space above or below.
         let [x, y, tw, th] = slots[0].thumb.unwrap();
-        assert_eq!((x, tw, th), (PAD + INNER, 200.0, 112.5));
-        assert_eq!(y, PAD + INNER + TITLE_H + (124.0 - 112.5) / 2.0);
+        assert_eq!((x, tw, th), (PAD + INNER, CARD_W - 2.0 * INNER, THUMB_H));
+        assert_eq!(y, PAD + INNER + TITLE_H);
         assert_eq!(slots[1].card[0], PAD + CARD_W + GAP);
         assert_eq!(slots[1].thumb, None, "minimized: no live image");
         // Small windows aren't blown up.
