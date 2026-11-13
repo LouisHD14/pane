@@ -49,18 +49,33 @@ const RULES = [
   "Und wenn alles läuft: bleib der Fahrer, nicht die Fracht.",
 ];
 
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
 export async function eggPage() {
   const me = getCurrentWebviewWindow();
   document.body.classList.add("egg-popup");
   const box = Object.assign(document.createElement("div"), { className: "egg" });
   box.setAttribute("role", "dialog");
-  box.setAttribute("aria-label", HEADLINE);
-  box.innerHTML = `
-    <h1>${HEADLINE}</h1>
-    <p class="sub">Die 40 Regeln der Millionärs-Autobahn — frei nach MJ DeMarco</p>
-    <ol>${RULES.map((r) => `<li>${r}</li>`).join("")}</ol>
-    <p class="sub">Esc schließt. Du hast nichts gesehen.</p>`;
   document.body.replaceChildren(box);
+
+  // `egg.txt` in Pane's data folder holds the reader's own lines; without it, the ones above.
+  const draw = async () => {
+    const own = await invoke<[string, string[]] | null>("egg_rules").catch(() => null);
+    const title = own?.[0] || HEADLINE;
+    const rules = own?.[1] ?? RULES;
+    const note = own ? "aus deiner egg.txt" : "frei nach MJ DeMarco — eigene Worte, kein Zitat";
+    box.setAttribute("aria-label", title);
+    box.innerHTML = `
+      <h1>${esc(title)}</h1>
+      <p class="sub">${rules.length} Grundsätze für die Überholspur · ${note}</p>
+      <ol>${rules.map((r) => `<li>${esc(r)}</li>`).join("")}</ol>
+      <p class="sub">Esc schließt. <button class="egg-edit">egg.txt bearbeiten</button></p>`;
+    box.querySelector<HTMLButtonElement>(".egg-edit")!.onclick = (e) => {
+      e.stopPropagation();
+      invoke("open_egg_file");
+    };
+  };
+  await draw();
 
   const close = () => invoke("close_popup");
   window.addEventListener("blur", close);
@@ -68,7 +83,8 @@ export async function eggPage() {
   box.addEventListener("click", close);
   const fit = () => invoke("fit_popup", { width: box.offsetWidth, height: box.scrollHeight, centered: true });
   // Opened again from the kept window: play the entrance once more.
-  me.listen("popup-open", () => {
+  me.listen("popup-open", async () => {
+    await draw(); // egg.txt may have been edited meanwhile
     box.style.animation = "none";
     void box.offsetWidth;
     box.style.animation = "";

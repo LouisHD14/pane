@@ -1099,6 +1099,38 @@ async fn open_egg(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri
     open_fitted(&app, format!("egg-{}", window.label()), client_x).await
 }
 
+/// `egg.txt` in Pane's data folder: one line per rule, `#` lines and blank lines skipped. The file is the
+/// reader's own and is never part of Pane (nothing is shipped or committed with it); without it the page
+/// shows its own lines. A first line starting with `# title:` replaces the headline.
+#[tauri::command]
+async fn egg_rules() -> Option<(String, Vec<String>)> {
+    let text = std::fs::read_to_string(win::data_dir().join("egg.txt")).ok()?;
+    let mut title = String::new();
+    let mut rules = Vec::new();
+    for line in text.lines().map(str::trim) {
+        match line.strip_prefix("# title:") {
+            Some(t) => title = t.trim().to_string(),
+            None if line.is_empty() || line.starts_with('#') => {}
+            None => rules.push(line.to_string()),
+        }
+    }
+    (!rules.is_empty()).then_some((title, rules))
+}
+
+/// Creates `egg.txt` with a short header if it isn't there and opens it in the editor.
+#[tauri::command]
+async fn open_egg_file() {
+    let path = win::data_dir().join("egg.txt");
+    if !path.exists() {
+        let _ = std::fs::create_dir_all(win::data_dir());
+        let header = "# One rule per line. Lines starting with # are ignored.\r\n\
+                      # A line like \"# title: ...\" replaces the headline.\r\n\
+                      # This file stays on this PC: it is not part of Pane and is never committed.\r\n\r\n";
+        let _ = std::fs::write(&path, header);
+    }
+    win::open(&path.to_string_lossy());
+}
+
 /// A popup page measured itself (CSS px): put it above its bar at the click, inside the monitor, and show it.
 #[tauri::command]
 async fn fit_popup(app: AppHandle, window: WebviewWindow, width: f64, height: f64, centered: bool) -> tauri::Result<()> {
@@ -1328,6 +1360,8 @@ fn main() {
             open_docker,
             open_docker_desktop,
             open_egg,
+            egg_rules,
+            open_egg_file,
             report_bug,
             open_log_folder,
             get_downloads,

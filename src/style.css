@@ -1699,6 +1699,16 @@ body.settings::after {
   margin: 12px 0 0;
 }
 
+.egg-edit {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 5px;
+}
+
 /* Windows "Animation effects" off → no motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
