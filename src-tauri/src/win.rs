@@ -207,6 +207,12 @@ pub fn move_pinned_async(hwnd: HWND, rc: RECT) {
 }
 
 /// Show (without activating) or hide from any thread, without waiting for the window's thread.
+/// Whether any part of `r` is on a monitor.
+pub fn on_a_monitor(r: RECT) -> bool {
+    use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
+    !unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONULL) }.is_invalid()
+}
+
 pub fn show_async(hwnd: HWND, show: bool) {
     unsafe {
         let _ = ShowWindowAsync(hwnd, if show { SW_SHOWNA } else { SW_HIDE });
