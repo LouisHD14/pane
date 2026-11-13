@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { closeOnBlur } from "./popup";
 
 const HEADLINE = "Fuck you! Ich zahle Bar.";
 
@@ -77,8 +78,7 @@ export async function eggPage() {
   };
   await draw();
 
-  const close = () => invoke("close_popup");
-  window.addEventListener("blur", close);
+  const close = closeOnBlur();
   document.addEventListener("keydown", (e) => e.key === "Escape" && close());
   box.addEventListener("click", close);
   const fit = () => invoke("fit_popup", { width: box.offsetWidth, height: box.scrollHeight, centered: true });

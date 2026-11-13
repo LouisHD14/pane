@@ -20,17 +20,23 @@ const SAME: u8 = 24;
 /// Rows read above the app's bottom edge. Browsers end in a 2-3 px grey frame line; over 12 rows the page's
 /// own colour wins (with 3 rows the line won: black Netflix and GitHub's dark page came out grey, 2026-11-12).
 const ROWS: i32 = 12;
-/// Readings in a row that must agree before a new colour is shown (one every 0.75 s: ~1.5-2 s).
+/// Readings in a row that must agree before a new colour of the same app is shown (one every 0.5 s: ~1-1.5 s).
+/// Another app on the bar, or a bar that is away, takes its colour at once (Steady::feed).
 const STEADY: u32 = 3;
 
-/// The 8 band colours (left to right across `strip`) of the app sitting on the bar on `monitor`,
-/// or None when no app reaches down to the bar there.
-pub fn app_floor(monitor: RECT, strip: RECT, bands: usize) -> Option<Vec<Rgb>> {
+/// The top app window on `monitor` (0 = none) and its 8 band colours (left to right across `strip`),
+/// or None when it doesn't reach down to the bar.
+pub fn app_floor(monitor: RECT, strip: RECT, bands: usize) -> (isize, Option<Vec<Rgb>>) {
     let app = crate::apps::taskbar_hwnds().into_iter().find(|&h| {
         let b = bounds(h);
         // On this monitor (by its centre) and not minimized.
         b.is_some_and(|b| contains(monitor, (b.left + b.right) / 2, (b.top + b.bottom) / 2)) && !unsafe { IsIconic(h) }.as_bool()
-    })?;
+    });
+    let id = app.map_or(0, |h| h.0 as isize);
+    (id, app.and_then(|app| floor_of(app, monitor, strip, bands)))
+}
+
+fn floor_of(app: HWND, monitor: RECT, strip: RECT, bands: usize) -> Option<Vec<Rgb>> {
     let b = bounds(app)?;
     if b.bottom < strip.top - 2 {
         return None; // a small window: the bar shows the normal glass
@@ -141,16 +147,20 @@ fn to_bands(z: &[Zone], x0: i32, x1: i32, left: i32, right: i32, n: usize) -> Ve
 }
 
 /// Shows a colour only once it held still for `STEADY` readings; "no app" (None) counts the same way.
+/// A different app window, or `at_once` (the bar is slid away, so nobody sees a flicker), skips the wait:
+/// switching apps recolours the bar right away, and a bar that comes up already has the right colours.
 #[derive(Default)]
 pub struct Steady {
     shown: Option<Option<Vec<Rgb>>>,
     candidate: Option<Option<Vec<Rgb>>>,
     count: u32,
+    app: isize,
 }
 
 impl Steady {
-    /// Feeds one reading; returns what to show when that changes.
-    pub fn feed(&mut self, now: Option<Vec<Rgb>>) -> Option<Option<Vec<Rgb>>> {
+    /// Feeds one reading of window `app`; returns what to show when that changes.
+    pub fn feed(&mut self, app: isize, now: Option<Vec<Rgb>>, at_once: bool) -> Option<Option<Vec<Rgb>>> {
+        let switched = std::mem::replace(&mut self.app, app) != app;
         let same = |a: &Option<Vec<Rgb>>, b: &Option<Vec<Rgb>>| match (a, b) {
             (Some(a), Some(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close(*x, *y, SAME / 2)),
             (None, None) => true,
@@ -160,6 +170,9 @@ impl Steady {
             self.count += 1;
         } else {
             (self.candidate, self.count) = (Some(now.clone()), 1);
+        }
+        if switched || at_once {
+            self.count = STEADY; // this reading counts as settled
         }
         if self.count < STEADY || self.shown.as_ref().is_some_and(|s| same(s, &now)) {
             return None;
@@ -212,17 +225,23 @@ mod tests {
     fn only_steady_colours_are_shown() {
         let mut s = Steady::default();
         let a = Some(vec![DARK; 8]);
-        assert_eq!(s.feed(a.clone()), None);
-        assert_eq!(s.feed(a.clone()), None);
-        assert_eq!(s.feed(a.clone()), Some(a.clone()));
-        assert_eq!(s.feed(a.clone()), None, "unchanged: nothing to send");
-        // A video: a different colour every reading never gets through.
+        let b = Some(vec![LIGHT; 8]);
+        // The first app on the bar: at once.
+        assert_eq!(s.feed(1, a.clone(), false), Some(a.clone()));
+        assert_eq!(s.feed(1, a.clone(), false), None, "unchanged: nothing to send");
+        // A video in the same app: a different colour every reading never gets through.
         for i in 0..10u8 {
-            assert_eq!(s.feed(Some(vec![[i * 25, 255 - i * 25, 90]; 8])), None);
+            assert_eq!(s.feed(1, Some(vec![[i * 25, 255 - i * 25, 90]; 8]), false), None);
         }
-        // No app on the bar any more: the glass, once that holds too.
-        assert_eq!(s.feed(None), None);
-        assert_eq!(s.feed(None), None);
-        assert_eq!(s.feed(None), Some(None));
+        // The same app changing colour for good: once it held still.
+        assert_eq!(s.feed(1, b.clone(), false), None);
+        assert_eq!(s.feed(1, b.clone(), false), None);
+        assert_eq!(s.feed(1, b.clone(), false), Some(b.clone()));
+        // Another app: at once.
+        assert_eq!(s.feed(2, a.clone(), false), Some(a.clone()));
+        // The bar is slid away: at once too, so it comes up in the right colours.
+        assert_eq!(s.feed(2, b.clone(), true), Some(b.clone()));
+        // No app on the bar any more: the glass, at once (the window changed).
+        assert_eq!(s.feed(0, None, false), Some(None));
     }
 }

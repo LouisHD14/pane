@@ -27,6 +27,8 @@ export type Settings = {
   show_date: boolean;
   done_glow: boolean;
   volume_media: boolean;
+  /** Bar elements in the user's order (arrange.ts). */
+  element_order: string[];
   /** Glass lightness 0 (dark) ..= 100 (light), 50 = the original look. */
   glass: number;
   hide_delay_ms: number;
@@ -42,6 +44,8 @@ export type Switch = { [K in keyof Settings]: Settings[K] extends boolean ? K : 
 type Item = { text: string; run: () => unknown; checked?: boolean; disabled?: boolean; stay?: boolean; more?: boolean };
 type Entry = Item | "-" | { heading: string };
 
+import { closeOnBlur } from "./popup";
+
 const close = () => invoke("close_popup");
 
 export async function menuPage() {
@@ -51,7 +55,7 @@ export async function menuPage() {
   list.setAttribute("role", "menu");
   list.setAttribute("aria-label", "Pane");
   document.body.replaceChildren(list);
-  window.addEventListener("blur", close);
+  closeOnBlur();
   // One popup, several pages: the main page, Settings, and a page per group of switches. Each page says where
   // its "Back" goes (PARENT), so Escape and Back always walk the same way out.
   type Page = "main" | "settings" | "bar" | "widgets" | "elements";

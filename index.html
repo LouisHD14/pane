@@ -8,11 +8,12 @@
   <body>
     <div class="bar">
       <div class="left">
-        <div id="media" class="media" hidden></div>
-        <button id="claude" class="claude" hidden></button>
-        <button id="codex" class="claude codex" hidden></button>
-        <button id="docker" class="docker" hidden></button>
+        <div id="media" class="media" data-move="media" hidden></div>
+        <button id="claude" class="claude" data-move="claude" hidden></button>
+        <button id="codex" class="claude codex" data-move="codex" hidden></button>
+        <button id="docker" class="docker" data-move="docker" hidden></button>
         <button id="update" class="update" hidden></button>
+        <button id="notice" class="notice" hidden></button>
       </div>
       <div class="center">
         <button id="start" class="start" aria-label="Start">
@@ -34,13 +35,15 @@
         <div id="apps" class="apps"></div>
       </div>
       <div class="right">
-        <button id="usage" class="usage" aria-label="System load, opens Task Manager"></button>
-        <button id="overflow" class="overflow-arrow" aria-label="Show hidden icons" hidden>
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4" /></svg>
-        </button>
-        <div id="tray" class="tray"></div>
-        <div id="status" class="status"></div>
-        <div class="time-block">
+        <button id="usage" class="usage" data-move="usage" aria-label="System load, opens Task Manager"></button>
+        <div class="tray-zone" data-move="tray">
+          <button id="overflow" class="overflow-arrow" aria-label="Show hidden icons" hidden>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4" /></svg>
+          </button>
+          <div id="tray" class="tray"></div>
+        </div>
+        <div id="status" class="status" data-move="status"></div>
+        <div class="time-block" data-move="clock">
           <button id="clock" class="clock" aria-label="Notifications and calendar">
             <span id="date" class="date"></span>
             <span id="time" class="time"></span>

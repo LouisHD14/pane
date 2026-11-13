@@ -47,9 +47,14 @@ pub struct Settings {
     /// Whether Pane has already set "Start with Windows" once. New installs start with it on (asked
     /// 2026-11-13); after that the user decides, in Pane or in Task Manager, and Pane never forces it again.
     pub autostart_set: bool,
+    /// Whether the "needs admin rights" notice was already shown (it is shown once, see main.rs warn_elevated).
+    pub admin_warned: bool,
     /// The user's own order of the pinned apps (app ids), set by dragging them in the bar. Only Pane's order:
     /// Windows' own taskbar pins stay as they are. Empty: Windows' pin order.
     pub pin_order: Vec<String>,
+    /// The user's order of the bar's elements (main.ts `ELEMENTS` keys: "claude", "usage", "clock", …), set by
+    /// dragging them along their side of the bar. Empty: the built-in order.
+    pub element_order: Vec<String>,
     /// How light the glass is: 0 dark ..= 100 light, 50 is Pane's original look. Darker adds acrylic tint
     /// (`tint`), lighter removes it and the pages add a white sheen (main.ts `applyLook`).
     pub glass: u8,
@@ -109,7 +114,9 @@ impl Default for Settings {
             done_glow: true,
             volume_media: true,
             autostart_set: false,
+            admin_warned: false,
             pin_order: Vec::new(),
+            element_order: Vec::new(),
             glass: 50,
             hide_delay_ms: 700,
             // With the overshoot and settle (main.rs `slide`); 120 ms was a plain slide.
@@ -144,6 +151,7 @@ impl Settings {
             "done_glow" => &mut self.done_glow,
             "volume_media" => &mut self.volume_media,
             "autostart_set" => &mut self.autostart_set,
+            "admin_warned" => &mut self.admin_warned,
             _ => return None,
         })
     }
@@ -210,6 +218,11 @@ pub fn set_pin_order(order: Vec<String>) -> Settings {
     save(Settings { pin_order: order, ..get() })
 }
 
+/// Saves the bar elements' order (keys, left to right; unknown keys are ignored by the pages).
+pub fn set_element_order(order: Vec<String>) -> Settings {
+    save(Settings { element_order: order, ..get() })
+}
+
 fn save(s: Settings) -> Settings {
     let dir = crate::win::data_dir();
     let saved = fs::create_dir_all(&dir).and_then(|_| fs::write(path(), serde_json::to_string_pretty(&s).unwrap_or_default()));
@@ -228,7 +241,7 @@ mod tests {
     #[test]
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
-        assert!(!s.autostart_set, "an old file hasn't been asked about autostart yet");
+        assert!(!s.autostart_set && !s.admin_warned, "an old file hasn't been asked about autostart or warned yet");
         assert!(s.autohide && s.show_media && s.show_docker && s.show_start && s.done_glow && s.volume_media && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
         assert_eq!((s.glass, s.hide_delay_ms, s.slide_ms, s.size), (50, 700, 260, Size::Normal));
     }
