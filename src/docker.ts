@@ -3,6 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { closeOnBlur } from "./popup";
 
 export type Container = {
   id: string;
@@ -48,8 +49,7 @@ export async function dockerPage() {
   box.setAttribute("role", "dialog");
   box.setAttribute("aria-label", "Docker containers");
   document.body.replaceChildren(box);
-  const close = () => invoke("close_popup");
-  window.addEventListener("blur", close);
+  const close = closeOnBlur();
   document.addEventListener("keydown", (e) => e.key === "Escape" && close());
 
   let busy = new Set<string>();

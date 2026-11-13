@@ -1500,6 +1500,24 @@ body.preview.preview-in {
   animation: pop 0.35s var(--spring);
 }
 
+/* A one-off notice (admin rights, see main.rs warn_elevated): amber, next to the update pill. */
+.notice {
+  height: 26px;
+  margin-left: 6px;
+  padding: 0 12px;
+  border-radius: 13px;
+  background: #ffb02e;
+  color: #2b1a00;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notice:hover,
+.notice:active {
+  background-color: #ffb02e;
+  filter: brightness(1.08);
+}
+
 /* ---------- Settings window (settings.ts): Windows' Mica glass behind a transparent page, our colours on top. */
 html.settings,
 body.settings {

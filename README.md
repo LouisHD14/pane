@@ -37,6 +37,9 @@ Windows SmartScreen may warn because the installer is not code-signed. Click "Mo
 ## Uninstall
 Settings > Apps > Installed apps > Pane > Uninstall. The uninstaller closes Pane, brings the taskbar back as it was, and asks whether to delete Pane's data too.
 
+## Known limits
+- **Apps running as administrator** (installers, elevated tools) take no clicks from Pane: Windows does not let a normal program post messages to an elevated window. Their tray icons and "Close window" do nothing; use the window itself. Pane says so once with a "Needs admin rights" pill.
+
 ## Safety
 The normal taskbar always comes back.
 - The only Windows setting Pane changes is taskbar auto-hide. Pane saves the old value first and gives it back on quit, crash, uninstall and next start.

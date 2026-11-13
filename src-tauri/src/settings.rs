@@ -47,6 +47,8 @@ pub struct Settings {
     /// Whether Pane has already set "Start with Windows" once. New installs start with it on (asked
     /// 2026-11-13); after that the user decides, in Pane or in Task Manager, and Pane never forces it again.
     pub autostart_set: bool,
+    /// Whether the "needs admin rights" notice was already shown (it is shown once, see main.rs warn_elevated).
+    pub admin_warned: bool,
     /// The user's own order of the pinned apps (app ids), set by dragging them in the bar. Only Pane's order:
     /// Windows' own taskbar pins stay as they are. Empty: Windows' pin order.
     pub pin_order: Vec<String>,
@@ -109,6 +111,7 @@ impl Default for Settings {
             done_glow: true,
             volume_media: true,
             autostart_set: false,
+            admin_warned: false,
             pin_order: Vec::new(),
             glass: 50,
             hide_delay_ms: 700,
@@ -144,6 +147,7 @@ impl Settings {
             "done_glow" => &mut self.done_glow,
             "volume_media" => &mut self.volume_media,
             "autostart_set" => &mut self.autostart_set,
+            "admin_warned" => &mut self.admin_warned,
             _ => return None,
         })
     }
@@ -228,7 +232,7 @@ mod tests {
     #[test]
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
-        assert!(!s.autostart_set, "an old file hasn't been asked about autostart yet");
+        assert!(!s.autostart_set && !s.admin_warned, "an old file hasn't been asked about autostart or warned yet");
         assert!(s.autohide && s.show_media && s.show_docker && s.show_start && s.done_glow && s.volume_media && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
         assert_eq!((s.glass, s.hide_delay_ms, s.slide_ms, s.size), (50, 700, 260, Size::Normal));
     }

@@ -6,6 +6,7 @@ import { renderTray, type TrayIcon } from "./tray";
 import { mountMedia, mountMiniMedia, renderMedia, renderMiniMedia, type NowPlaying } from "./media";
 import { dockerPage, renderDocker, type Docker } from "./docker";
 import { eggPage } from "./egg";
+import { closeOnBlur } from "./popup";
 import { renderWeather, type Report as WeatherReport } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
@@ -121,36 +122,89 @@ function previewPage() {
   // after the DOM is written, never from requestAnimationFrame: the popup is still hidden at that point and a
   // hidden page gets no frames, so waiting for one meant most previews never showed at all (2026-11-13).
   const drawn = () => invoke("preview_drawn");
+  // One element per window, kept across updates and keyed by its hwnd. Rebuilding every card on each update
+  // threw away the button under the mouse, so a click on ✕ (or a card) that landed while a title changed did
+  // nothing — and titles change often, which is what made it feel random (reported 2026-11-13).
+  const cards = new Map<number, HTMLElement>();
+
+  const build = (hwnd: number) => {
+    const card = Object.assign(document.createElement("div"), { className: "card" });
+    const main = Object.assign(document.createElement("button"), { className: "card-main" });
+    const title = Object.assign(document.createElement("span"), { className: "card-title" });
+    const body = document.createElement("div");
+    main.append(title, body);
+    const close = Object.assign(document.createElement("button"), { className: "card-close", textContent: "✕", title: "Close window" });
+    card.append(main, close);
+    main.onclick = () => invoke("focus_window", { hwnd });
+    close.onclick = (e) => {
+      e.stopPropagation();
+      invoke("close_window", { hwnd });
+    };
+    // Middle-click closes the window, like on Windows' previews (and never starts autoscroll).
+    card.addEventListener("mousedown", (e) => e.button === 1 && e.preventDefault());
+    card.addEventListener("auxclick", (e) => e.button === 1 && invoke("close_window", { hwnd }));
+    return card;
+  };
+
+  /** Writes a card's current state into its (reused) element. */
+  const update = (card: HTMLElement, c: Card, icon: string) => {
+    card.classList.toggle("active", c.active);
+    px(card, c.rect);
+    const main = card.querySelector<HTMLElement>(".card-main")!;
+    const title = card.querySelector<HTMLElement>(".card-title")!;
+    const body = main.lastElementChild as HTMLElement;
+    if (main.title !== c.title) {
+      main.title = c.title;
+      main.setAttribute("aria-label", `Switch to ${c.title}`);
+      title.textContent = c.title;
+      card.querySelector(".card-close")!.setAttribute("aria-label", `Close ${c.title}`);
+    }
+    Object.assign(title.style, { height: `${c.body[1]}px`, lineHeight: `${c.body[1]}px` });
+    body.className = c.live ? "card-body" : "card-body minimized";
+    px(body, c.body);
+    const img = body.querySelector("img");
+    if (!c.live && icon) {
+      if (!img) body.append(Object.assign(document.createElement("img"), { src: icon, alt: "" }));
+    } else img?.remove();
+    // The app's toolbar is rebuilt only when its buttons change, so one under the mouse stays clickable.
+    const want = c.buttons.map((t) => `${t.id}:${t.enabled}:${t.icon.length}`).join(",");
+    let bar = card.querySelector<HTMLElement>(".card-buttons");
+    if (bar && bar.dataset.of !== want) {
+      bar.remove();
+      bar = null;
+    }
+    if (c.buttons.length && !bar) {
+      bar = toolbar(c);
+      bar.dataset.of = want;
+      card.append(bar);
+    }
+    if (bar) px(bar, c.bar);
+  };
+
   const show = (p: Preview | null) => {
-    if (!p) return void document.body.replaceChildren(); // emptied while hidden, for the next use
+    if (!p) {
+      // Emptied while hidden, for the next use.
+      cards.clear();
+      document.body.replaceChildren();
+      return;
+    }
     if (!document.body.children.length) replay(document.body, "preview-in"); // fresh, not an update
-    document.body.replaceChildren(
-      ...p.cards.map((c) => {
-        const card = Object.assign(document.createElement("div"), { className: "card" });
-        card.classList.toggle("active", c.active);
-        px(card, c.rect);
-        const main = Object.assign(document.createElement("button"), { className: "card-main", title: c.title });
-        main.setAttribute("aria-label", `Switch to ${c.title}`);
-        const title = Object.assign(document.createElement("span"), { className: "card-title", textContent: c.title });
-        // Height of the title row = where the image starts.
-        Object.assign(title.style, { height: `${c.body[1]}px`, lineHeight: `${c.body[1]}px` });
-        const body = document.createElement("div");
-        body.className = c.live ? "card-body" : "card-body minimized";
-        px(body, c.body);
-        if (!c.live && p.icon) body.append(Object.assign(document.createElement("img"), { src: p.icon, alt: "" }));
-        main.append(title, body);
-        main.onclick = () => invoke("focus_window", { hwnd: c.hwnd });
-        const close = Object.assign(document.createElement("button"), { className: "card-close", textContent: "✕", title: "Close window" });
-        close.setAttribute("aria-label", `Close ${c.title}`);
-        close.onclick = () => closeWindow(c);
-        card.append(main, close);
-        if (c.buttons.length) card.append(toolbar(c));
-        // Middle-click closes the window, like on Windows' previews (and never starts autoscroll).
-        card.addEventListener("mousedown", (e) => e.button === 1 && e.preventDefault());
-        card.addEventListener("auxclick", (e) => e.button === 1 && closeWindow(c));
-        return card;
-      }),
-    );
+    const next = p.cards.map((c) => {
+      let card = cards.get(c.hwnd);
+      if (!card) cards.set(c.hwnd, (card = build(c.hwnd)));
+      update(card, c, p.icon);
+      return card;
+    });
+    for (const [hwnd, card] of [...cards]) {
+      if (!p.cards.some((c) => c.hwnd === hwnd)) {
+        card.remove();
+        cards.delete(hwnd);
+      }
+    }
+    // Touch the DOM only when the order changed: re-inserting an element cancels a click in progress.
+    if (next.length !== document.body.children.length || next.some((el, i) => document.body.children[i] !== el)) {
+      document.body.replaceChildren(...next);
+    }
     drawn();
   };
   // Listen first: Rust may send the layout right after get_preview answered "nothing yet".
@@ -171,8 +225,8 @@ function overflowPage() {
   me.listen<TrayIcon[]>("tray", (e) => show(e.payload));
   window.addEventListener("focus", () => replay(document.body, "open"));
   // Close like a Windows flyout: when focus goes elsewhere (also when an app opens its tray menu).
-  window.addEventListener("blur", () => invoke("close_popup"));
-  document.addEventListener("keydown", (e) => e.key === "Escape" && invoke("close_popup"));
+  const close = closeOnBlur();
+  document.addEventListener("keydown", (e) => e.key === "Escape" && close());
 }
 
 function barPage() {
@@ -287,6 +341,17 @@ function barPage() {
   };
   invoke<TrayIcon[]>("get_tray").then(showTray);
   me.listen<TrayIcon[]>("tray", (e) => showTray(e.payload));
+  // Hovering a popup button builds its page, so the click itself opens it at once.
+  const warmOnHover = (el: HTMLElement, kind: string) => {
+    let warmed = 0;
+    el.addEventListener("mouseenter", () => {
+      if (Date.now() - warmed > 30_000) {
+        warmed = Date.now();
+        invoke("warm_popup", { kind });
+      }
+    });
+  };
+  warmOnHover($("overflow"), "overflow");
   $("overflow").addEventListener("click", () => {
     const r = $("overflow").getBoundingClientRect();
     invoke("open_overflow", { clientX: r.left + r.width / 2 });
@@ -344,6 +409,7 @@ function barPage() {
   // --- Docker: running containers while Docker runs; a click shows them all in a popup.
   invoke<Docker | null>("get_docker").then((d) => renderDocker($("docker"), d));
   me.listen<Docker | null>("docker", (e) => renderDocker($("docker"), e.payload));
+  warmOnHover($("docker"), "docker");
   $("docker").addEventListener("click", () => {
     const r = $("docker").getBoundingClientRect();
     invoke("open_docker", { clientX: r.left + r.width / 2 });
@@ -373,6 +439,19 @@ function barPage() {
   me.listen<Usage>("usage", (e) => renderUsage($("usage"), e.payload));
   $("usage").addEventListener("click", () => invoke("open_task_manager"));
   $("clock").addEventListener("click", () => invoke("open_notifications"));
+
+  // --- A one-off notice pill (e.g. a window running as administrator ignoring clicks); a click dismisses it.
+  me.listen<{ text: string; tip: string }>("notice", (e) => {
+    const pill = $("notice");
+    pill.textContent = e.payload.text;
+    pill.title = e.payload.tip;
+    pill.setAttribute("aria-label", e.payload.tip.split("\n").join(". "));
+    if (pill.hidden) {
+      pill.hidden = false;
+      once(pill, "pop-in");
+    }
+  });
+  $("notice").addEventListener("click", () => ($("notice").hidden = true));
 
   // --- Update: a pill when GitHub has a newer Pane; click installs it (Pane restarts).
   me.listen<{ version: string; notes: string }>("update", (e) => showUpdate(e.payload.version, e.payload.notes));

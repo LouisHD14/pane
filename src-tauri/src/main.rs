@@ -472,7 +472,14 @@ fn codex_loop(app: AppHandle) {
 fn autohide_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
         let on = SHOWN.load(SeqCst) && settings::get().autohide;
-        std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
+        // While a bar is away, look often: the wait before it comes up is latency the user feels against the
+        // Windows taskbar, which reveals the moment the edge is touched. GetCursorPos costs next to nothing.
+        let hidden = on && bars(&app).iter().any(|b| b.concealed);
+        std::thread::sleep(Duration::from_millis(match (on, hidden) {
+            (false, _) => 500,
+            (true, true) => 15,
+            (true, false) => 60,
+        }));
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
         let preview_open = preview::is_open();
         let settings = settings::get();
@@ -707,8 +714,24 @@ fn activate(hwnd: isize) {
 }
 
 #[tauri::command]
-fn close_window(hwnd: isize) {
-    apps::close(hwnd);
+async fn close_window(app: AppHandle, hwnd: isize) {
+    if !apps::close(hwnd) {
+        warn_elevated(&app);
+    }
+}
+
+/// Windows refused to pass a click on to a window running as administrator (UIPI): say so once, so it doesn't
+/// just look broken. Shown a single time ever (`admin_warned`), because nothing Pane can do fixes it.
+fn warn_elevated(app: &AppHandle) {
+    win::log("a window running as administrator ignored the click (UIPI)");
+    if settings::get().admin_warned {
+        return;
+    }
+    settings::set("admin_warned", &serde_json::Value::Bool(true));
+    let _ = app.emit(
+        "notice",
+        serde_json::json!({ "text": "Needs admin rights", "tip": "That window belongs to a program running as administrator.\nWindows does not let Pane (or any normal program) click or close it.\nUse the window itself, or start Pane as administrator." }),
+    );
 }
 
 /// A click on a button of a window's thumbnail toolbar (in its preview).
@@ -759,6 +782,20 @@ async fn preview_drawn(window: WebviewWindow) {
 #[tauri::command]
 async fn warm_preview() {
     preview::warm();
+}
+
+/// The mouse is on the button that opens a popup: build its page now, hidden, so the click opens it at once
+/// instead of waiting a few hundred ms for a new WebView page (reported as "doesn't show / really delayed").
+#[tauri::command]
+async fn warm_popup(app: AppHandle, window: WebviewWindow, kind: String) {
+    if settings::get().low_memory || !POPUP_KINDS.contains(&kind.as_str()) {
+        return;
+    }
+    let label = format!("{kind}-{}", window.label());
+    if app.get_webview_window(&label).is_none() && popup(&app, &label).is_ok() {
+        // Counts as kept, so an unused one is dropped again after a while.
+        lock(&POPUPS_KEPT).push((label, Instant::now()));
+    }
 }
 
 /// Last Docker state (None: Docker isn't running), sent to the bars and the Docker popups when it changes.
@@ -989,8 +1026,10 @@ async fn get_tray() -> Vec<tray::TrayIcon> {
 }
 
 #[tauri::command]
-fn tray_click(id: String, kind: tray::Click, x: i32, y: i32) {
-    tray::click(&id, kind, x, y);
+async fn tray_click(app: AppHandle, id: String, kind: tray::Click, x: i32, y: i32) {
+    if !tray::click(&id, kind, x, y) {
+        warn_elevated(&app);
+    }
 }
 
 /// A hidden glass popup (tray overflow, Pane menu, Docker) for a bar. It loads the same page, which tells itself
@@ -1019,6 +1058,11 @@ fn popup(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
 async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
     let label = format!("overflow-{}", window.label());
     let popup = match app.get_webview_window(&label) {
+        // Open already: the arrow closes it again, like Windows' own.
+        Some(open) if lock(&POPUPS_OPEN).contains(&label) && open.is_visible().unwrap_or(false) => {
+            close_popup(open);
+            return Ok(());
+        }
         Some(popup) => popup,
         None => popup(&app, &label)?,
     };
@@ -1044,11 +1088,17 @@ static POPUP_X: Mutex<Option<HashMap<String, f64>>> = Mutex::new(None);
 
 /// Opens (or reopens a kept) popup that sizes itself: its page measures itself and calls `fit_popup`, which
 /// shows it. A kept page is told with "popup-open" to refresh and measure again.
-async fn open_fitted(app: &AppHandle, label: String, client_x: f64) -> tauri::Result<()> {
+async fn open_fitted(app: &AppHandle, label: String, client_x: f64, toggle: bool) -> tauri::Result<()> {
     lock(&POPUP_X).get_or_insert_with(HashMap::new).insert(label.clone(), client_x);
     let result = match app.get_webview_window(&label) {
-        // Open and on screen: just bring it forward.
-        Some(open) if lock(&POPUPS_OPEN).contains(&label) && open.is_visible().unwrap_or(false) => return open.set_focus(),
+        // Open and on screen: a widget's own button closes it again, a right-click brings it forward.
+        Some(open) if lock(&POPUPS_OPEN).contains(&label) && open.is_visible().unwrap_or(false) => {
+            if toggle {
+                close_popup(open);
+                return Ok(());
+            }
+            return open.set_focus();
+        }
         // Kept (or open but never shown): its page refreshes, measures itself and shows.
         Some(kept) => {
             popup_opened(&label);
@@ -1085,18 +1135,18 @@ async fn open_fitted(app: &AppHandle, label: String, client_x: f64) -> tauri::Re
 /// (a native menu always closes on a click).
 #[tauri::command]
 async fn open_menu(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
-    open_fitted(&app, format!("menu-{}", window.label()), client_x).await
+    open_fitted(&app, format!("menu-{}", window.label()), client_x, false).await
 }
 
 /// A click on the Docker widget: the containers popup above it.
 #[tauri::command]
 async fn open_docker(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
-    open_fitted(&app, format!("docker-{}", window.label()), client_x).await
+    open_fitted(&app, format!("docker-{}", window.label()), client_x, true).await
 }
 
 #[tauri::command]
 async fn open_egg(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
-    open_fitted(&app, format!("egg-{}", window.label()), client_x).await
+    open_fitted(&app, format!("egg-{}", window.label()), client_x, false).await
 }
 
 /// `egg.txt` in Pane's data folder: one line per rule, `#` lines and blank lines skipped. The file is the
@@ -1354,6 +1404,7 @@ fn main() {
             open_settings,
             fit_popup,
             warm_preview,
+            warm_popup,
             preview_drawn,
             get_docker,
             docker_action,

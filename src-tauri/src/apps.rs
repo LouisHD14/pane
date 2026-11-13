@@ -226,10 +226,13 @@ pub fn bring_to_front(hwnd: isize) {
     }
 }
 
-/// Asks the window to close, like its X button.
-pub fn close(hwnd: isize) {
+/// Asks the window to close, like its X button. False when Windows refused the message although the window is
+/// still there: an app running as administrator can't be told anything by a normal program (UIPI), which is
+/// why clicks on installers and other elevated windows seem to do nothing.
+pub fn close(hwnd: isize) -> bool {
     unsafe {
-        let _ = PostMessageW(Some(HWND(hwnd as _)), WM_CLOSE, WPARAM(0), LPARAM(0));
+        let window = HWND(hwnd as _);
+        PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok() || !IsWindow(Some(window)).as_bool()
     }
 }
 

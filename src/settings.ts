@@ -145,6 +145,19 @@ export async function settingsPage() {
       ),
       group(
         "Auto-hide",
+        el(
+          "div",
+          { className: "row" },
+          el("span", { className: "note" }, "Quick like Windows' own taskbar: comes up at once, waits briefly, slides fast."),
+          el("button", {
+            className: "button",
+            textContent: "Taskbar-like",
+            onclick: () => {
+              set("hide_delay_ms", 250);
+              set("slide_ms", 150);
+            },
+          }),
+        ),
         slider("hide_delay_ms", "Stays after the mouse leaves", 100, 3000, 50, (v) => seconds(v) + (v === 700 ? " (default)" : "")),
         slider("slide_ms", "Slide duration", 0, 600, 10, (v) => (v ? `${v} ms` : "Instant") + (v === 260 ? " (default)" : "")),
       ),
