@@ -1,23 +1,90 @@
 <!doctype html>
-<!-- Source of docs/banner.png. Re-render from the docs folder (PowerShell):
-  & "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe" --headless --hide-scrollbars --force-device-scale-factor=1 --window-size=1600,400 "--screenshot=$PWD\banner.png" "file:///$PWD/banner.html"
+<!-- Source of docs/banner.png. 1280x640 (2:1): GitHub's recommended size for a repository's social preview,
+  which is also what the README shows at the top. Re-render from the docs folder (PowerShell):
+  & "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe" --headless --hide-scrollbars --force-device-scale-factor=1 --window-size=1280,640 "--screenshot=$PWD\banner.png" "file:///$PWD/banner.html"
+  The bar is shown at 1:1 from bar.png and cropped, never scaled down: a whole 2555 px bar squeezed into the
+  banner was unreadable, which is the whole point of showing it.
 -->
 <meta charset="utf-8">
 <style>
-  html, body { margin: 0; width: 1600px; height: 400px; overflow: hidden; }
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; }
   body {
-    background: radial-gradient(ellipse at 70% 130%, #1d4ed8 0%, #0b1e5b 45%, #050b24 100%);
+    /* Pane's own glass palette: a near-black desk with one cool light source behind the bar. */
+    background:
+      radial-gradient(60% 50% at 50% 103%, rgba(77, 163, 255, 0.5) 0%, rgba(29, 78, 216, 0.16) 45%, transparent 72%),
+      radial-gradient(120% 90% at 50% -20%, #16203a 0%, #0a0f1f 55%, #05070f 100%);
     font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
     color: #fff;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 44px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* ~13 % safe margin: the image is read at thumbnail size most of the time. */
+    padding: 84px 96px 0;
+    box-sizing: border-box;
   }
-  .title { text-align: center; }
-  h1 { margin: 0; font-size: 104px; font-weight: 600; letter-spacing: -2px; line-height: 1; }
-  p { margin: 14px 0 0; font-size: 30px; color: #c7d2fe; }
-  img { width: 1520px; border-radius: 10px; box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+
+  h1 {
+    margin: 0;
+    font-size: 112px;
+    font-weight: 600;
+    letter-spacing: -3px;
+    line-height: 1;
+    background: linear-gradient(180deg, #ffffff 35%, #a8c7ff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  p {
+    margin: 18px 0 0;
+    font-size: 30px;
+    font-weight: 400;
+    color: #b9c6e8;
+    letter-spacing: -0.2px;
+  }
+
+  .points {
+    margin-top: 26px;
+    display: flex;
+    gap: 34px;
+    font-size: 19px;
+    color: #8fa0c8;
+  }
+
+  .points span::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 10px;
+    border-radius: 50%;
+    background: #4da3ff;
+    vertical-align: 3px;
+  }
+
+  /* A 1:1 slice of the real bar: the widget end, which is what Pane adds to a taskbar. */
+  .strip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 150px;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent),
+      linear-gradient(180deg, #000 60%, transparent);
+    -webkit-mask-composite: source-in;
+    mask-composite: intersect;
+  }
+
+  .strip img {
+    position: absolute;
+    bottom: 34px;
+    left: 0;
+    /* Unscaled, shifted so the widget end of the 2555 px bar (system load, tray, clock, weather) is what shows. */
+    margin-left: -1400px;
+  }
 </style>
-<div class="title">
-  <h1>Pane</h1>
-  <p>A glass taskbar with widgets for Windows 11</p>
-</div>
-<img src="bar.png" alt="">
+<h1>Pane</h1>
+<p>A glass taskbar with widgets for Windows 11</p>
+<div class="points"><span>Keeps every taskbar habit</span><span>Widgets that earn their space</span><span>~0 % CPU idle</span></div>
+<div class="strip"><img src="bar.png" alt=""></div>
