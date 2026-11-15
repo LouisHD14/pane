@@ -207,6 +207,12 @@ pub fn move_pinned_async(hwnd: HWND, rc: RECT) {
 }
 
 /// Show (without activating) or hide from any thread, without waiting for the window's thread.
+/// Whether any part of `r` is on a monitor.
+pub fn on_a_monitor(r: RECT) -> bool {
+    use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
+    !unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONULL) }.is_invalid()
+}
+
 pub fn show_async(hwnd: HWND, show: bool) {
     unsafe {
         let _ = ShowWindowAsync(hwnd, if show { SW_SHOWNA } else { SW_HIDE });
@@ -439,6 +445,67 @@ pub fn run_in_terminal(command: &str) {
     if let Err(e) = result {
         log(&format!("can't open a terminal: {e}"));
     }
+}
+
+/// Opens a terminal in the user's folder: Windows Terminal, or PowerShell where it isn't installed.
+pub fn open_terminal() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x10;
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
+    let wt = std::process::Command::new("wt.exe").args(["-d", &home]).spawn();
+    if wt.is_err() {
+        let ps = std::process::Command::new("powershell.exe").current_dir(&home).creation_flags(CREATE_NEW_CONSOLE).spawn();
+        if let Err(e) = ps {
+            log(&format!("can't open a terminal: {e}"));
+        }
+    }
+}
+
+/// Runs a program the user typed in the settings (a path, a program on PATH, or a command line with
+/// arguments), the way the Run box does, through `start` so cmd's own window never shows.
+pub fn run_user_command(command: &str) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
+    let result = std::process::Command::new("cmd")
+        .raw_arg(format!("/c start \"\" {command}"))
+        .current_dir(home)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+    if let Err(e) = result {
+        log(&format!("can't run {command:?}: {e}"));
+    }
+}
+
+/// The Start menu or Windows Search while it is open (the foreground window), as its rect. Told apart by the
+/// process (the window titles are in the user's language), remembered per window so the 15 ms auto-hide
+/// poll doesn't open a process handle every time.
+pub fn start_menu() -> Option<RECT> {
+    use std::sync::Mutex;
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    static LAST: Mutex<(isize, bool)> = Mutex::new((0, false));
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.is_invalid() {
+        return None;
+    }
+    {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.0 != fg.0 as isize {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(fg, Some(&mut pid)) };
+            let exe = crate::apps::exe_of(pid);
+            let name = exe.rsplit('\\').next().unwrap_or("");
+            *last = (fg.0 as isize, matches!(name, "startmenuexperiencehost.exe" | "searchhost.exe" | "searchapp.exe"));
+        }
+        if !last.1 {
+            return None;
+        }
+    }
+    // Closed, the Start window stays but is cloaked.
+    let mut cloaked = 0u32;
+    let _ = unsafe { DwmGetWindowAttribute(fg, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, 4) };
+    let mut r = RECT::default();
+    (cloaked == 0 && unsafe { GetWindowRect(fg, &mut r) }.is_ok()).then_some(r)
 }
 
 /// The cursor's screen position in physical pixels.

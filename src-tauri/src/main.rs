@@ -6,6 +6,7 @@ mod apps;
 mod claude;
 mod codex;
 mod colors;
+mod extras;
 mod docker;
 mod http;
 mod media;
@@ -27,7 +28,9 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEven
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::ShortcutState;
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LEFT, VK_LWIN, VK_RIGHT, VK_SHIFT, VK_VOLUME_DOWN, VK_VOLUME_UP,
+};
 
 /// The floating bar keeps this far (logical px) from the screen edges...
 const GAP: f64 = 6.0;
@@ -247,7 +250,11 @@ fn slide(app: &AppHandle, label: String, rc: RECT, below: i32, show: bool) {
             }
             win::next_frame();
         }
-        if !show && current() {
+        // Away: parked just below the screen, still shown, rather than hidden. A hidden window's page stops
+        // drawing and its acrylic is rebuilt when it is shown again, so for a moment the bar coming up showed the
+        // bare blur (the desktop's colours) and old content (reported 2026-11-13). Hidden only where another
+        // monitor sits below this one (the parked bar would show there).
+        if !show && current() && win::on_a_monitor(at(1.0)) {
             win::show_async(hwnd, false);
             win::move_pinned_async(hwnd, rc);
         }
@@ -472,10 +479,24 @@ fn codex_loop(app: AppHandle) {
 fn autohide_loop(app: AppHandle) {
     std::thread::spawn(move || loop {
         let on = SHOWN.load(SeqCst) && settings::get().autohide;
-        std::thread::sleep(Duration::from_millis(if on { 60 } else { 500 }));
+        // While a bar is away, look often: the wait before it comes up is latency the user feels against the
+        // Windows taskbar, which reveals the moment the edge is touched. GetCursorPos costs next to nothing.
+        let hidden = on && bars(&app).iter().any(|b| b.concealed);
+        std::thread::sleep(Duration::from_millis(match (on, hidden) {
+            (false, _) => 500,
+            (true, true) => 15,
+            (true, false) => 60,
+        }));
         let Some((x, y)) = win::cursor().filter(|_| on) else { continue };
         let preview_open = preview::is_open();
         let settings = settings::get();
+        // Pressing the Windows key: the Start menu (or Search) is open, and the bar of its monitor comes up and
+        // stays while it is, like Windows' own auto-hidden taskbar.
+        let start = settings.win_key.then(win::start_menu).flatten();
+        let start_on = |m: RECT| start.is_some_and(|r| {
+            let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+            cx >= m.left && cx < m.right && cy >= m.top && cy < m.bottom
+        });
         let delay = Duration::from_millis(settings.hide_delay_ms as u64);
         let mut changes = Vec::new();
         for bar in bars(&app).iter_mut() {
@@ -483,7 +504,7 @@ fn autohide_loop(app: AppHandle) {
             let inside = x >= m.left && x < m.right && y >= m.top && y < m.bottom;
             let over = inside && y >= bar.layout(&settings).0.top;
             if bar.concealed {
-                if inside && y >= m.bottom - 2 && !bar.fullscreen {
+                if (inside && y >= m.bottom - 2 || start_on(m)) && !bar.fullscreen {
                     (bar.concealed, bar.left_at) = (false, None);
                     changes.push((bar.label.clone(), bar.window(&settings), m.bottom, true));
                 }
@@ -495,7 +516,7 @@ fn autohide_loop(app: AppHandle) {
             // count; a menu elsewhere on the monitor doesn't keep the bar up.
             let strip = bar.layout(&settings).0;
             let near_bar = RECT { top: strip.top - (48.0 * bar.scale) as i32, ..m };
-            let hold = over || bar.fullscreen || preview_open || bar_has_popup(&bar.label) || win::menu_open_in(near_bar);
+            let hold = over || start_on(m) || bar.fullscreen || preview_open || bar_has_popup(&bar.label) || win::menu_open_in(near_bar);
             if hold {
                 bar.left_at = None;
             } else if bar.left_at.get_or_insert_with(Instant::now).elapsed() > delay {
@@ -509,33 +530,62 @@ fn autohide_loop(app: AppHandle) {
     });
 }
 
-/// Adaptive colour and the app-colour floor: every 0.75 s, the colours of the app sitting on each bar
-/// (colors.rs), sent to that bar once they held still. Only while one of the settings is on and the bar is visible.
+/// Adaptive colour and the app-colour floor: the colours of the apps sitting on each bar (colors.rs), sent to
+/// that bar. Which app is where is checked every 0.1 s (cheap); the screen is read (~20 ms) at once when that
+/// changes and twice more while the new app finishes drawing, else every 0.75 s for colour changes inside an
+/// app, which are only shown once they held still (a video never flickers). Only while one of the settings is
+/// on; not behind fullscreen apps.
 fn tint_loop(app: AppHandle) {
+    /// Colour bands across the bar (tint.ts and style.css have as many).
+    const BANDS: usize = 16;
+    /// After the apps on the bar changed, readings this long count as settled at once (the new app may still
+    /// be drawing, or animating in, on the first one).
+    const FRESH: Duration = Duration::from_millis(600);
+    #[derive(Default)]
+    struct State {
+        steady: colors::Steady,
+        layout: colors::Layout,
+        changed: Option<Instant>,
+        read: Option<Instant>,
+    }
     std::thread::spawn(move || {
-        let mut steady: HashMap<String, colors::Steady> = HashMap::new();
+        let mut bars_state: HashMap<String, State> = HashMap::new();
         let mut was_on = false;
         loop {
-            std::thread::sleep(Duration::from_millis(750));
+            std::thread::sleep(Duration::from_millis(100));
             let s = settings::get();
             let on = SHOWN.load(SeqCst) && (s.adaptive_color || s.blend);
             if !on {
                 if was_on {
-                    let _ = app.emit("tint", None::<Vec<[u8; 3]>>);
-                    steady.clear();
+                    let _ = app.emit("tint", None::<colors::Bands>);
+                    bars_state.clear();
                 }
                 was_on = false;
                 continue;
             }
             was_on = true;
-            let targets: Vec<(String, RECT, RECT)> = bars(&app)
+            let targets: Vec<(String, RECT, bool)> = bars(&app)
                 .iter()
-                .filter(|b| !b.concealed && !b.fullscreen)
-                .map(|b| (b.label.clone(), b.layout(&s).0, b.monitor))
+                .filter(|b| !b.fullscreen)
+                .map(|b| (b.label.clone(), b.layout(&s).0, b.concealed))
                 .collect();
-            for (label, strip, monitor) in targets {
-                let now = colors::app_floor(monitor, strip, 8);
-                if let Some(show) = steady.entry(label.clone()).or_default().feed(now) {
+            for (label, strip, away) in targets {
+                let st = bars_state.entry(label.clone()).or_default();
+                let layout = colors::layout(strip);
+                if layout != st.layout {
+                    st.layout = layout;
+                    st.changed = Some(Instant::now());
+                }
+                let since = |t: Option<Instant>| t.map_or(Duration::MAX, |t| t.elapsed());
+                let fresh = since(st.changed) < FRESH;
+                // At most every 0.2 s (a window being dragged changes the layout on every check).
+                let due = since(st.read) >= Duration::from_millis(if fresh { 200 } else { 750 });
+                if !due {
+                    continue;
+                }
+                st.read = Some(Instant::now());
+                let now = colors::read(strip, &st.layout, BANDS);
+                if let Some(show) = st.steady.feed(st.layout.ids(), now, away || fresh) {
                     let _ = app.emit_to(label.as_str(), "tint", show);
                 }
             }
@@ -663,6 +713,102 @@ fn status_loop(app: AppHandle) {
     });
 }
 
+/// Scroll on the volume icon: one volume key press (2 %), so Windows shows its own volume flyout too; the icon
+/// follows at once instead of with the next 2 s status check.
+#[tauri::command]
+async fn volume_step(app: AppHandle, up: bool) {
+    win::press(&[if up { VK_VOLUME_UP } else { VK_VOLUME_DOWN }]);
+    std::thread::sleep(Duration::from_millis(30));
+    let _ = app.emit("status", status::read());
+}
+
+#[tauri::command]
+fn set_awake(app: AppHandle, on: bool) {
+    extras::set_awake(on);
+    let _ = app.emit("awake", extras::awake());
+}
+
+#[tauri::command]
+fn get_awake() -> bool {
+    extras::awake()
+}
+
+#[tauri::command]
+async fn get_desktops() -> extras::Desktops {
+    extras::desktops()
+}
+
+/// A click on a desktop dot: Windows' own Ctrl+Win+Left/Right, as often as it takes (there is no documented
+/// way to switch to a desktop directly).
+#[tauri::command]
+async fn go_to_desktop(index: usize) {
+    let now = extras::desktops();
+    let steps = extras::steps(now.current, index.min(now.count - 1));
+    for _ in 0..steps.unsigned_abs() {
+        win::press(&[VK_CONTROL, VK_LWIN, if steps > 0 { VK_RIGHT } else { VK_LEFT }]);
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
+/// Sends the desktops to the bars whenever Explorer records a change (a registry event, no polling).
+fn desktops_loop(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last = extras::desktops();
+        loop {
+            extras::wait_for_desktop_change();
+            let now = extras::desktops();
+            if now != last {
+                let _ = app.emit("desktops", &now);
+                last = now;
+            }
+        }
+    });
+}
+
+/// The user's own widget: its last output (None: no command set).
+static CUSTOM: Mutex<Option<String>> = Mutex::new(None);
+/// A click on the widget asks for a fresh run.
+static CUSTOM_NOW: AtomicBool = AtomicBool::new(false);
+
+/// Runs the user's command every `custom_seconds` (and when it changes or is clicked) and sends its first
+/// line to the bars. Wakes once a second to look; runs nothing while no command is set.
+fn custom_loop(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut ran: Option<(String, Instant)> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let s = settings::get();
+            let command = if SHOWN.load(SeqCst) { s.custom_command.clone() } else { String::new() };
+            if command.is_empty() {
+                if lock(&CUSTOM).take().is_some() {
+                    let _ = app.emit("custom", None::<String>);
+                }
+                ran = None;
+                continue;
+            }
+            let due = CUSTOM_NOW.swap(false, SeqCst)
+                || ran.as_ref().is_none_or(|(c, at)| *c != command || at.elapsed() >= Duration::from_secs(s.custom_seconds as u64));
+            if !due {
+                continue;
+            }
+            let out = extras::run_custom(&command);
+            ran = Some((command, Instant::now()));
+            *lock(&CUSTOM) = Some(out.clone());
+            let _ = app.emit("custom", Some(out));
+        }
+    });
+}
+
+#[tauri::command]
+fn get_custom() -> Option<String> {
+    lock(&CUSTOM).clone()
+}
+
+#[tauri::command]
+fn refresh_custom() {
+    CUSTOM_NOW.store(true, SeqCst);
+}
+
 #[tauri::command]
 fn open_start() {
     win::press(&[VK_LWIN]);
@@ -707,8 +853,24 @@ fn activate(hwnd: isize) {
 }
 
 #[tauri::command]
-fn close_window(hwnd: isize) {
-    apps::close(hwnd);
+async fn close_window(app: AppHandle, hwnd: isize) {
+    if !apps::close(hwnd) {
+        warn_elevated(&app);
+    }
+}
+
+/// Windows refused to pass a click on to a window running as administrator (UIPI): say so once, so it doesn't
+/// just look broken. Shown a single time ever (`admin_warned`), because nothing Pane can do fixes it.
+fn warn_elevated(app: &AppHandle) {
+    win::log("a window running as administrator ignored the click (UIPI)");
+    if settings::get().admin_warned {
+        return;
+    }
+    settings::set("admin_warned", &serde_json::Value::Bool(true));
+    let _ = app.emit(
+        "notice",
+        serde_json::json!({ "text": "Needs admin rights", "tip": "That window belongs to a program running as administrator.\nWindows does not let Pane (or any normal program) click or close it.\nUse the window itself, or start Pane as administrator." }),
+    );
 }
 
 /// A click on a button of a window's thumbnail toolbar (in its preview).
@@ -759,6 +921,20 @@ async fn preview_drawn(window: WebviewWindow) {
 #[tauri::command]
 async fn warm_preview() {
     preview::warm();
+}
+
+/// The mouse is on the button that opens a popup: build its page now, hidden, so the click opens it at once
+/// instead of waiting a few hundred ms for a new WebView page (reported as "doesn't show / really delayed").
+#[tauri::command]
+async fn warm_popup(app: AppHandle, window: WebviewWindow, kind: String) {
+    if settings::get().low_memory || !POPUP_KINDS.contains(&kind.as_str()) {
+        return;
+    }
+    let label = format!("{kind}-{}", window.label());
+    if app.get_webview_window(&label).is_none() && popup(&app, &label).is_ok() {
+        // Counts as kept, so an unused one is dropped again after a while.
+        lock(&POPUPS_KEPT).push((label, Instant::now()));
+    }
 }
 
 /// Last Docker state (None: Docker isn't running), sent to the bars and the Docker popups when it changes.
@@ -939,7 +1115,7 @@ async fn set_setting(app: AppHandle, key: String, value: serde_json::Value) -> O
     if matches!(key.as_str(), "autohide" | "fill" | "blend" | "size") && SHOWN.load(SeqCst) {
         on_main(&app, |h| place_bars(h, true));
     }
-    if key == "glass" {
+    if key == "glass" || key == "opacity" {
         let tint = now.tint();
         on_main(&app, move |h| {
             // Bars and open popups; the settings window has its own (Mica) backdrop.
@@ -968,9 +1144,35 @@ async fn set_pin_order(app: AppHandle, order: Vec<String>) {
     push_apps(&app);
 }
 
+/// The bar elements' new order after a drag in one bar; every page gets it with the settings.
+#[tauri::command]
+async fn set_element_order(app: AppHandle, order: Vec<String>) {
+    let now = settings::set_element_order(order.into_iter().filter(|k| k.len() <= 32).take(32).collect());
+    let _ = app.emit("settings", &now);
+}
+
 #[tauri::command]
 async fn open_volume_mixer() {
     win::open("ms-settings:apps-volume");
+}
+
+/// A double-click on an empty part of the bar: what the user chose in the settings (`void_action`).
+#[tauri::command]
+fn void_action() {
+    let action = settings::get().void_action;
+    match action.as_str() {
+        "" | "none" => {}
+        "terminal" => win::open_terminal(),
+        "explorer" => win::open("explorer.exe"),
+        "taskmgr" => open_task_manager(),
+        "desktop" => win::press(&[VK_LWIN, VIRTUAL_KEY(b'D' as u16)]),
+        command => win::run_user_command(command),
+    }
+}
+
+#[tauri::command]
+fn open_terminal() {
+    win::open_terminal();
 }
 
 #[tauri::command]
@@ -989,8 +1191,10 @@ async fn get_tray() -> Vec<tray::TrayIcon> {
 }
 
 #[tauri::command]
-fn tray_click(id: String, kind: tray::Click, x: i32, y: i32) {
-    tray::click(&id, kind, x, y);
+async fn tray_click(app: AppHandle, id: String, kind: tray::Click, x: i32, y: i32) {
+    if !tray::click(&id, kind, x, y) {
+        warn_elevated(&app);
+    }
 }
 
 /// A hidden glass popup (tray overflow, Pane menu, Docker) for a bar. It loads the same page, which tells itself
@@ -1019,6 +1223,11 @@ fn popup(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
 async fn open_overflow(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
     let label = format!("overflow-{}", window.label());
     let popup = match app.get_webview_window(&label) {
+        // Open already: the arrow closes it again, like Windows' own.
+        Some(open) if lock(&POPUPS_OPEN).contains(&label) && open.is_visible().unwrap_or(false) => {
+            close_popup(open);
+            return Ok(());
+        }
         Some(popup) => popup,
         None => popup(&app, &label)?,
     };
@@ -1044,11 +1253,17 @@ static POPUP_X: Mutex<Option<HashMap<String, f64>>> = Mutex::new(None);
 
 /// Opens (or reopens a kept) popup that sizes itself: its page measures itself and calls `fit_popup`, which
 /// shows it. A kept page is told with "popup-open" to refresh and measure again.
-async fn open_fitted(app: &AppHandle, label: String, client_x: f64) -> tauri::Result<()> {
+async fn open_fitted(app: &AppHandle, label: String, client_x: f64, toggle: bool) -> tauri::Result<()> {
     lock(&POPUP_X).get_or_insert_with(HashMap::new).insert(label.clone(), client_x);
     let result = match app.get_webview_window(&label) {
-        // Open and on screen: just bring it forward.
-        Some(open) if lock(&POPUPS_OPEN).contains(&label) && open.is_visible().unwrap_or(false) => return open.set_focus(),
+        // Open and on screen: a widget's own button closes it again, a right-click brings it forward.
+        Some(open) if lock(&POPUPS_OPEN).contains(&label) && open.is_visible().unwrap_or(false) => {
+            if toggle {
+                close_popup(open);
+                return Ok(());
+            }
+            return open.set_focus();
+        }
         // Kept (or open but never shown): its page refreshes, measures itself and shows.
         Some(kept) => {
             popup_opened(&label);
@@ -1085,18 +1300,18 @@ async fn open_fitted(app: &AppHandle, label: String, client_x: f64) -> tauri::Re
 /// (a native menu always closes on a click).
 #[tauri::command]
 async fn open_menu(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
-    open_fitted(&app, format!("menu-{}", window.label()), client_x).await
+    open_fitted(&app, format!("menu-{}", window.label()), client_x, false).await
 }
 
 /// A click on the Docker widget: the containers popup above it.
 #[tauri::command]
 async fn open_docker(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
-    open_fitted(&app, format!("docker-{}", window.label()), client_x).await
+    open_fitted(&app, format!("docker-{}", window.label()), client_x, true).await
 }
 
 #[tauri::command]
 async fn open_egg(app: AppHandle, window: WebviewWindow, client_x: f64) -> tauri::Result<()> {
-    open_fitted(&app, format!("egg-{}", window.label()), client_x).await
+    open_fitted(&app, format!("egg-{}", window.label()), client_x, false).await
 }
 
 /// `egg.txt` in Pane's data folder: one line per rule, `#` lines and blank lines skipped. The file is the
@@ -1334,6 +1549,15 @@ fn main() {
             claude_icon,
             open_claude_usage,
             open_task_manager,
+            void_action,
+            open_terminal,
+            volume_step,
+            set_awake,
+            get_awake,
+            get_desktops,
+            go_to_desktop,
+            get_custom,
+            refresh_custom,
             get_tray,
             tray_click,
             open_overflow,
@@ -1351,9 +1575,11 @@ fn main() {
             get_settings,
             set_setting,
             set_pin_order,
+            set_element_order,
             open_settings,
             fit_popup,
             warm_preview,
+            warm_popup,
             preview_drawn,
             get_docker,
             docker_action,
@@ -1381,6 +1607,8 @@ fn main() {
             set_shown(&handle, true);
             watch_loop(handle.clone());
             status_loop(handle.clone());
+            desktops_loop(handle.clone());
+            custom_loop(handle.clone());
             weather_loop(handle.clone());
             usage_loop(handle.clone());
             claude_loop(handle.clone());

@@ -289,10 +289,12 @@ fn cached_settings() -> Vec<Setting> {
 
 /// Sends the click to the icon's app the way Explorer does, so its own menu or window opens.
 /// `x`, `y`: the icon's screen position (apps place their menu there).
-pub fn click(id: &str, kind: Click, x: i32, y: i32) {
-    let Some(icon) = lock(&ICONS).iter().find(|i| i.id() == id).cloned() else { return };
+/// False when Windows refused the messages although the owner window is still there: an app running as
+/// administrator takes nothing from a normal program (UIPI), so its icon seems dead.
+pub fn click(id: &str, kind: Click, x: i32, y: i32) -> bool {
+    let Some(icon) = lock(&ICONS).iter().find(|i| i.id() == id).cloned() else { return true };
     if icon.callback == 0 {
-        return;
+        return true;
     }
     let hwnd = HWND(icon.hwnd as _);
     unsafe {
@@ -300,10 +302,12 @@ pub fn click(id: &str, kind: Click, x: i32, y: i32) {
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         // Pane is in front after the user's click; let the app take the focus for its menu.
         let _ = AllowSetForegroundWindow(pid);
+        let mut sent = true;
         for &msg in messages(kind, icon.version) {
             let (wp, lp) = params(icon.version, icon.uid, x, y, msg);
-            let _ = PostMessageW(Some(hwnd), icon.callback, wp, lp);
+            sent &= PostMessageW(Some(hwnd), icon.callback, wp, lp).is_ok();
         }
+        sent || !IsWindow(Some(hwnd)).as_bool()
     }
 }
 

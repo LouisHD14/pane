@@ -28,7 +28,70 @@ function toggle(key: Switch, text: string) {
   return el("label", { className: "row" }, el("span", {}, text), input);
 }
 
-type NumKey = "glass" | "hide_delay_ms" | "slide_ms";
+type NumKey = "glass" | "opacity" | "hide_delay_ms" | "slide_ms" | "custom_seconds";
+
+/** The user's own widget: a command whose first line shows on the bar (settings.rs `custom_command`). */
+function customWidget() {
+  const input = el("input", { type: "text", className: "text", id: "s-custom", placeholder: "e.g. git -C C:\\code\\app branch --show-current", spellcheck: false });
+  input.onchange = () => set("custom_command", input.value.trim());
+  updates.push((s) => {
+    if (document.activeElement !== input) input.value = s.custom_command;
+  });
+  return el(
+    "div",
+    {},
+    el("div", { className: "row" }, el("label", { htmlFor: "s-custom" }, "Command"), input),
+    el(
+      "div",
+      { className: "row" },
+      el("span", { className: "note" }, "Runs hidden in your user folder; its first line shows on the bar. Click it on the bar to run it now. Empty: off."),
+    ),
+    slider("custom_seconds", "Runs every", 2, 600, 1, (v) => (v < 60 ? `${v} s` : `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ""}`)),
+  );
+}
+
+/** What a double-click on an empty part of the bar does (settings.rs `void_action`); "other" is a program. */
+function voidAction() {
+  const choices = [
+    ["none", "Nothing"],
+    ["terminal", "Open a terminal"],
+    ["explorer", "Open File Explorer"],
+    ["taskmgr", "Open Task Manager"],
+    ["desktop", "Show the desktop"],
+    ["other", "Open an app…"],
+  ] as const;
+  const known = choices.map(([v]) => v as string).filter((v) => v !== "other");
+  const select = el("select", { id: "s-void", className: "select" }, ...choices.map(([value, text]) => el("option", { value }, text)));
+  const program = el("input", {
+    type: "text",
+    className: "text",
+    placeholder: "e.g. notepad, or C:\\Path\\App.exe",
+    spellcheck: false,
+  });
+  program.setAttribute("aria-label", "App to open");
+  const programRow = el("div", { className: "row" }, el("span", { className: "note" }, "A program name, a path, or a command line"), program);
+  const show = (v: string) => {
+    const other = !known.includes(v);
+    select.value = other ? "other" : v;
+    programRow.hidden = !other;
+    if (other && document.activeElement !== program) program.value = v;
+  };
+  select.onchange = () => {
+    if (select.value === "other") {
+      programRow.hidden = false;
+      program.focus();
+      if (program.value.trim()) set("void_action", program.value.trim());
+    } else set("void_action", select.value);
+  };
+  program.onchange = () => program.value.trim() && set("void_action", program.value.trim());
+  updates.push((s) => show(s.void_action));
+  return el(
+    "div",
+    {},
+    el("div", { className: "row" }, el("label", { htmlFor: "s-void" }, "Double-click on the empty bar"), select),
+    programRow,
+  );
+}
 
 /** A slider; `live` sends while dragging (for what is seen at once), otherwise once on release. */
 function slider(key: NumKey, text: string, min: number, max: number, step: number, show: (v: number) => string, live = false) {
@@ -128,6 +191,7 @@ export async function settingsPage() {
   };
   refresh.onclick = loadDownloads;
   const lightness = (v: number) => (v === 50 ? "Default" : v < 50 ? `Darker ${50 - v}` : `Lighter ${v - 50}`);
+  const opacity = (v: number) => (v === 50 ? "Default" : v === 0 ? "Clear" : v === 100 ? "Solid" : v < 50 ? `Clearer ${50 - v}` : `More solid ${v - 50}`);
   document.body.replaceChildren(
     el(
       "main",
@@ -142,9 +206,25 @@ export async function settingsPage() {
         toggle("all_monitors", "Show apps from all monitors"),
         sizes(),
         slider("glass", "Glass lightness", 0, 100, 5, lightness, true),
+        slider("opacity", "Glass opacity", 0, 100, 5, opacity, true),
+        voidAction(),
       ),
       group(
         "Auto-hide",
+        el(
+          "div",
+          { className: "row" },
+          el("span", { className: "note" }, "Quick like Windows' own taskbar: comes up at once, waits briefly, slides fast."),
+          el("button", {
+            className: "button",
+            textContent: "Taskbar-like",
+            onclick: () => {
+              set("hide_delay_ms", 250);
+              set("slide_ms", 150);
+            },
+          }),
+        ),
+        toggle("win_key", "Come up with the Windows key (while Start is open)"),
         slider("hide_delay_ms", "Stays after the mouse leaves", 100, 3000, 50, (v) => seconds(v) + (v === 700 ? " (default)" : "")),
         slider("slide_ms", "Slide duration", 0, 600, 10, (v) => (v ? `${v} ms` : "Instant") + (v === 260 ? " (default)" : "")),
       ),
@@ -169,6 +249,13 @@ export async function settingsPage() {
         toggle("show_clock", "Time"),
         toggle("show_date", "Date"),
       ),
+      group(
+        "Extras",
+        toggle("wheel", "Scroll on the volume icon to change it, on an app to step through its windows"),
+        toggle("show_awake", "Keep-awake button (the PC and screen don't sleep while it's on)"),
+        toggle("show_desktops", "Virtual desktops (click a dot to switch, or scroll)"),
+      ),
+      group("Your own widget", customWidget()),
       group("Memory", toggle("low_memory", "Low memory mode (no GPU, applies after restart)")),
       group(
         "Windows",

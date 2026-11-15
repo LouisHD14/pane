@@ -47,12 +47,34 @@ pub struct Settings {
     /// Whether Pane has already set "Start with Windows" once. New installs start with it on (asked
     /// 2026-11-13); after that the user decides, in Pane or in Task Manager, and Pane never forces it again.
     pub autostart_set: bool,
+    /// Whether the "needs admin rights" notice was already shown (it is shown once, see main.rs warn_elevated).
+    pub admin_warned: bool,
     /// The user's own order of the pinned apps (app ids), set by dragging them in the bar. Only Pane's order:
     /// Windows' own taskbar pins stay as they are. Empty: Windows' pin order.
     pub pin_order: Vec<String>,
+    /// The user's order of the bar's elements (main.ts `ELEMENTS` keys: "claude", "usage", "clock", …), set by
+    /// dragging them along their side of the bar. Empty: the built-in order.
+    pub element_order: Vec<String>,
     /// How light the glass is: 0 dark ..= 100 light, 50 is Pane's original look. Darker adds acrylic tint
     /// (`tint`), lighter removes it and the pages add a white sheen (main.ts `applyLook`).
     pub glass: u8,
+    /// How see-through the glass is: 0 clear ..= 100 nearly solid, 50 is Pane's original look. Scales how much
+    /// of the blur the acrylic tint covers (`tint`); the app-colour slab follows it in CSS (main.ts `applyLook`).
+    pub opacity: u8,
+    /// Auto-hide: the bar comes up while the Start menu or Search is open (pressing the Windows key).
+    pub win_key: bool,
+    /// What a double-click on an empty part of the bar does: "none", "terminal", "explorer", "taskmgr",
+    /// "desktop", or any other text is run as a program (a path or a command line, main.rs `void_action`).
+    pub void_action: String,
+    /// Scroll on the volume icon changes the volume; on an app icon it steps through that app's windows.
+    pub wheel: bool,
+    /// A keep-awake button (cup) on the bar (extras.rs).
+    pub show_awake: bool,
+    /// Virtual desktop dots on the bar (extras.rs).
+    pub show_desktops: bool,
+    /// The user's own widget: a command run every `custom_seconds`, its first line shown on the bar. Empty: off.
+    pub custom_command: String,
+    pub custom_seconds: u32,
     /// Auto-hide: how long after the mouse left the bar it slides away (ms).
     pub hide_delay_ms: u32,
     /// Auto-hide: how long the slide takes (ms).
@@ -81,6 +103,10 @@ impl Size {
 }
 
 const GLASS_MAX: f64 = 100.0;
+/// A program path or command line fits; longer is a mistake.
+const VOID_MAX: usize = 400;
+/// How often the user's command runs: at most every 2 s (it starts a process), at least every hour.
+const CUSTOM_SECONDS: (f64, f64) = (2.0, 3600.0);
 const HIDE_DELAY: (f64, f64) = (100.0, 3000.0);
 const SLIDE: (f64, f64) = (0.0, 600.0);
 
@@ -88,7 +114,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             autohide: false,
-            fill: false,
+            fill: true, // default since 2026-11-14 (the user: "Fill the screen edge should be default")
             adaptive_color: false,
             blend: false,
             all_monitors: false,
@@ -109,8 +135,18 @@ impl Default for Settings {
             done_glow: true,
             volume_media: true,
             autostart_set: false,
+            admin_warned: false,
             pin_order: Vec::new(),
+            element_order: Vec::new(),
             glass: 50,
+            opacity: 50,
+            win_key: true,
+            void_action: "none".into(),
+            wheel: true,
+            show_awake: false,
+            show_desktops: false,
+            custom_command: String::new(),
+            custom_seconds: 30,
             hide_delay_ms: 700,
             // With the overshoot and settle (main.rs `slide`); 120 ms was a plain slide.
             slide_ms: 260,
@@ -118,6 +154,9 @@ impl Default for Settings {
         }
     }
 }
+
+/// The most the acrylic tint covers at full opacity (~90 %: a trace of the blur still shows).
+const SOLID: u32 = 0xE6;
 
 impl Settings {
     fn switch(&mut self, key: &str) -> Option<&mut bool> {
@@ -144,6 +183,11 @@ impl Settings {
             "done_glow" => &mut self.done_glow,
             "volume_media" => &mut self.volume_media,
             "autostart_set" => &mut self.autostart_set,
+            "admin_warned" => &mut self.admin_warned,
+            "win_key" => &mut self.win_key,
+            "wheel" => &mut self.wheel,
+            "show_awake" => &mut self.show_awake,
+            "show_desktops" => &mut self.show_desktops,
             _ => return None,
         })
     }
@@ -157,6 +201,10 @@ impl Settings {
         let num = |(lo, hi): (f64, f64)| value.as_f64().map(|n| n.round().clamp(lo, hi));
         match key {
             "glass" => self.glass = num((0.0, GLASS_MAX))? as u8,
+            "opacity" => self.opacity = num((0.0, GLASS_MAX))? as u8,
+            "void_action" => self.void_action = value.as_str()?.trim().chars().take(VOID_MAX).collect(),
+            "custom_command" => self.custom_command = value.as_str()?.trim().chars().take(VOID_MAX).collect(),
+            "custom_seconds" => self.custom_seconds = num(CUSTOM_SECONDS)? as u32,
             "hide_delay_ms" => self.hide_delay_ms = num(HIDE_DELAY)? as u32,
             "slide_ms" => self.slide_ms = num(SLIDE)? as u32,
             "size" => self.size = Size::deserialize(value).ok()?,
@@ -168,16 +216,23 @@ impl Settings {
     /// A hand-edited file gets the same limits as the settings window.
     fn clamped(mut self) -> Self {
         self.glass = self.glass.min(GLASS_MAX as u8);
+        self.opacity = self.opacity.min(GLASS_MAX as u8);
+        self.void_action = self.void_action.chars().take(VOID_MAX).collect();
+        self.custom_command = self.custom_command.chars().take(VOID_MAX).collect();
+        self.custom_seconds = (self.custom_seconds as f64).clamp(CUSTOM_SECONDS.0, CUSTOM_SECONDS.1) as u32;
         self.hide_delay_ms = (self.hide_delay_ms as f64).clamp(HIDE_DELAY.0, HIDE_DELAY.1) as u32;
         self.slide_ms = (self.slide_ms as f64).clamp(SLIDE.0, SLIDE.1) as u32;
         self
     }
 
-    /// Acrylic tint (0xAABBGGRR) for the glass lightness: 50 is the original 0x40_1A_12_10 (dark blue-grey over
-    /// ~25 % of the blur); towards 0 it covers up to 75 %, towards 100 it fades out.
+    /// Acrylic tint (0xAABBGGRR) for the glass lightness and opacity: at 50 / 50 the original 0x40_1A_12_10 (dark
+    /// blue-grey over ~25 % of the blur). Lightness: towards 0 it covers up to 75 %, towards 100 it fades out.
+    /// Opacity then scales that: towards 0 down to none (only the blur: clear glass), towards 100 up to ~90 %.
     pub fn tint(&self) -> u32 {
         let light = self.glass.min(100) as u32;
         let alpha = if light <= 50 { 0x40 + (50 - light) * 0x80 / 50 } else { 0x40 * (100 - light) / 50 };
+        let o = self.opacity.min(100) as u32;
+        let alpha = if o <= 50 { alpha * o / 50 } else { alpha + (SOLID - alpha) * (o - 50) / 50 };
         alpha << 24 | 0x1A_12_10
     }
 }
@@ -210,6 +265,11 @@ pub fn set_pin_order(order: Vec<String>) -> Settings {
     save(Settings { pin_order: order, ..get() })
 }
 
+/// Saves the bar elements' order (keys, left to right; unknown keys are ignored by the pages).
+pub fn set_element_order(order: Vec<String>) -> Settings {
+    save(Settings { element_order: order, ..get() })
+}
+
 fn save(s: Settings) -> Settings {
     let dir = crate::win::data_dir();
     let saved = fs::create_dir_all(&dir).and_then(|_| fs::write(path(), serde_json::to_string_pretty(&s).unwrap_or_default()));
@@ -228,7 +288,7 @@ mod tests {
     #[test]
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
-        assert!(!s.autostart_set, "an old file hasn't been asked about autostart yet");
+        assert!(!s.autostart_set && !s.admin_warned, "an old file hasn't been asked about autostart or warned yet");
         assert!(s.autohide && s.show_media && s.show_docker && s.show_start && s.done_glow && s.volume_media && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
         assert_eq!((s.glass, s.hide_delay_ms, s.slide_ms, s.size), (50, 700, 260, Size::Normal));
     }
@@ -239,7 +299,15 @@ mod tests {
         assert_eq!(s.tint(), 0x40_1A_12_10);
         assert_eq!(s.size.height(), 48.0);
         assert_eq!(Settings { glass: 0, ..s.clone() }.tint(), 0xC0_1A_12_10);
-        assert_eq!(Settings { glass: 100, ..s }.tint(), 0x00_1A_12_10);
+        assert_eq!(Settings { glass: 100, ..s.clone() }.tint(), 0x00_1A_12_10);
+        // Opacity: clear glass is the bare blur, solid covers ~90 %, whatever the lightness.
+        assert_eq!(Settings { opacity: 0, ..s.clone() }.tint(), 0x00_1A_12_10);
+        assert_eq!(Settings { opacity: 100, ..s.clone() }.tint(), 0xE6_1A_12_10);
+        assert_eq!(Settings { opacity: 100, glass: 100, ..s.clone() }.tint(), 0xE6_1A_12_10);
+        assert_eq!(Settings { opacity: 75, ..s.clone() }.tint(), 0x93_1A_12_10);
+        assert!(s.win_key && s.void_action == "none");
+        assert!(s.fill, "square, side to side, like the Windows taskbar");
+        assert!(s.wheel && !s.show_awake && !s.show_desktops && s.custom_command.is_empty(), "extras start off");
     }
 
     #[test]
@@ -255,6 +323,13 @@ mod tests {
         assert!(s.apply("autohide", &json!(true)).is_some() && s.autohide);
         assert!(s.apply("autohide", &json!(1)).is_none());
         assert!(s.apply("glass", &json!("light")).is_none());
+        assert!(s.apply("opacity", &json!(140)).is_some() && s.opacity == 100);
+        assert!(s.apply("void_action", &json!("  terminal ")).is_some() && s.void_action == "terminal");
+        assert!(s.apply("void_action", &json!("x".repeat(900))).is_some() && s.void_action.len() == 400);
+        assert!(s.apply("void_action", &json!(3)).is_none());
+        assert!(s.apply("win_key", &json!(false)).is_some() && !s.win_key);
+        assert!(s.apply("custom_seconds", &json!(0)).is_some() && s.custom_seconds == 2);
+        assert!(s.apply("custom_command", &json!(" git -C C:\\src branch --show-current ")).is_some() && s.custom_command.starts_with("git"));
         assert!(s.apply("nope", &json!(true)).is_none());
         let edited: Settings = serde_json::from_str(r#"{"glass":200,"hide_delay_ms":5,"slide_ms":5000}"#).unwrap();
         let edited = edited.clamped();

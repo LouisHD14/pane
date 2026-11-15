@@ -12,6 +12,10 @@
      Both 0 at the default, which is the original look. */
   --wash: 0;
   --shade: 0;
+  /* Glass opacity (main.ts applyLook) for the app-colour slab: --frost scales its white layer (0 = clear),
+     --solid lays a dark layer over it (0 at the default). */
+  --frost: 1;
+  --solid: 0;
   color-scheme: dark;
 }
 
@@ -24,6 +28,14 @@
 @property --t5 { syntax: "<color>"; inherits: true; initial-value: transparent; }
 @property --t6 { syntax: "<color>"; inherits: true; initial-value: transparent; }
 @property --t7 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t8 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t9 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t10 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t11 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t12 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t13 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t14 { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --t15 { syntax: "<color>"; inherits: true; initial-value: transparent; }
 
 html,
 body {
@@ -82,8 +94,9 @@ body.blend.tinted::before {
 body.blend .bar {
   border-radius: 8px;
   background:
+    linear-gradient(rgb(18 18 26 / var(--solid)), rgb(18 18 26 / var(--solid))),
     linear-gradient(rgb(0 0 0 / var(--shade)), rgb(0 0 0 / var(--shade))),
-    linear-gradient(180deg, rgb(255 255 255 / calc(0.09 + var(--wash))), rgb(255 255 255 / calc(0.05 + var(--wash))));
+    linear-gradient(180deg, rgb(255 255 255 / calc((0.09 + var(--wash)) * var(--frost))), rgb(255 255 255 / calc((0.05 + var(--wash)) * var(--frost))));
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
@@ -111,13 +124,13 @@ body::before {
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(90deg, var(--t0) 0%, var(--t1) 14.3%, var(--t2) 28.6%, var(--t3) 42.9%, var(--t4) 57.1%, var(--t5) 71.4%, var(--t6) 85.7%, var(--t7) 100%);
+  background: linear-gradient(90deg, var(--t0) 0%, var(--t1) 6.7%, var(--t2) 13.3%, var(--t3) 20%, var(--t4) 26.7%, var(--t5) 33.3%, var(--t6) 40%, var(--t7) 46.7%, var(--t8) 53.3%, var(--t9) 60%, var(--t10) 66.7%, var(--t11) 73.3%, var(--t12) 80%, var(--t13) 86.7%, var(--t14) 93.3%, var(--t15) 100%);
   opacity: 0;
   transition: opacity 0.5s var(--ease);
 }
 
 body.tinted {
-  transition: --t0 0.6s, --t1 0.6s, --t2 0.6s, --t3 0.6s, --t4 0.6s, --t5 0.6s, --t6 0.6s, --t7 0.6s;
+  transition: --t0 0.3s, --t1 0.3s, --t2 0.3s, --t3 0.3s, --t4 0.3s, --t5 0.3s, --t6 0.3s, --t7 0.3s, --t8 0.3s, --t9 0.3s, --t10 0.3s, --t11 0.3s, --t12 0.3s, --t13 0.3s, --t14 0.3s, --t15 0.3s;
 }
 
 body.tinted::before {
@@ -149,7 +162,9 @@ body.no-network .st-network,
 body.no-volume .vol-wrap,
 body.no-battery .st-battery,
 body.no-date #date,
-body.no-clock #time {
+body.no-clock #time,
+body.no-awake #awake,
+body.no-desktops #desktops {
   display: none !important;
 }
 
@@ -226,18 +241,21 @@ body.shine::after {
   to { transform: translateY(4px) scale(0.99); opacity: 0.55; }
 }
 
-/* ---------- Buttons: soft hover, springy press. */
+/* ---------- Buttons: soft hover, springy press. The hover fades in but goes at once when the mouse leaves, so
+   sweeping along the bar never leaves a trail of fading highlights (roblox-framework UI-11: "subtle, fast,
+   stops instantly on leave"). */
 button {
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   border-radius: 7px;
-  transition: background-color 0.18s var(--ease), transform 0.15s var(--ease), opacity 0.2s var(--ease);
+  transition: background-color 0s, transform 0.15s var(--ease), opacity 0.2s var(--ease);
 }
 
 button:hover {
   background-color: var(--hover);
+  transition: background-color 0.12s var(--ease), transform 0.15s var(--ease), opacity 0.2s var(--ease);
 }
 
 button:active {
@@ -366,6 +384,28 @@ button:focus-visible {
    buttons' transform transition; `settle` holds the dropped icon in place for one frame before it glides home. */
 .app.pinned {
   touch-action: none;
+}
+
+/* Bar elements being rearranged (arrange.ts): the one under the mouse floats over the others. */
+.bar.arranging,
+.bar.arranging * {
+  cursor: grabbing;
+}
+
+[data-move].moving {
+  z-index: 2;
+  border-radius: 6px;
+  background-color: var(--hover);
+}
+
+.tray-zone {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+body.no-tray .tray-zone {
+  display: none;
 }
 
 .app.dragging {
@@ -1500,6 +1540,24 @@ body.preview.preview-in {
   animation: pop 0.35s var(--spring);
 }
 
+/* A one-off notice (admin rights, see main.rs warn_elevated): amber, next to the update pill. */
+.notice {
+  height: 26px;
+  margin-left: 6px;
+  padding: 0 12px;
+  border-radius: 13px;
+  background: #ffb02e;
+  color: #2b1a00;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notice:hover,
+.notice:active {
+  background-color: #ffb02e;
+  filter: brightness(1.08);
+}
+
 /* ---------- Settings window (settings.ts): Windows' Mica glass behind a transparent page, our colours on top. */
 html.settings,
 body.settings {
@@ -1639,7 +1697,30 @@ body.settings::after {
   transform: translateX(20px);
 }
 
+/* The double-click choice and its app field, in the buttons' glass look. */
+.select,
+.text {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  background: var(--glass);
+  color: var(--text);
+  font: inherit;
+}
+
+.text {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.select option {
+  background: #202024;
+  color: #fff;
+}
+
 .settings-page input:focus-visible,
+.settings-page select:focus-visible,
 .settings-page button:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 2px;
@@ -1717,4 +1798,90 @@ body.settings::after {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---------- Extras (extras.ts): keep awake, desktop dots, the user's own widget. */
+.awake {
+  width: 32px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+}
+
+.awake svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.awake .steam {
+  opacity: 0;
+}
+
+/* On: lit in the accent, steaming. Still, not animated: it can stay on for hours, and a looping animation
+   would keep the page drawing the whole time (Pane stays at ~0 % CPU when idle). */
+.awake.on svg {
+  stroke: var(--accent);
+}
+
+.awake.on .steam {
+  opacity: 1;
+  transition: opacity 0.3s var(--ease);
+}
+
+.desktops {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.desk {
+  width: 14px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.desk::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--text-dim);
+  opacity: 0.6;
+  transition: width 0.2s var(--spring), background-color 0.2s var(--ease), opacity 0.2s var(--ease);
+}
+
+.desk.current {
+  width: 22px;
+}
+
+.desk.current::before {
+  width: 14px;
+  background: var(--text);
+  opacity: 1;
+}
+
+.custom {
+  height: 28px;
+  max-width: 260px;
+  padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  background: var(--glass);
+  border-radius: 14px;
+}
+
+.custom.running {
+  opacity: 0.6;
 }
