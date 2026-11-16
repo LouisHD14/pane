@@ -3,7 +3,7 @@ import { Menu, type MenuItemOptions, type PredefinedMenuItemOptions } from "@tau
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { mountStatus, renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
-import { mountMedia, mountMiniMedia, renderMedia, renderMiniMedia, type NowPlaying } from "./media";
+import { mountMedia, renderMedia, type NowPlaying } from "./media";
 import { dockerPage, renderDocker, type Docker } from "./docker";
 import { eggPage } from "./egg";
 import { closeOnBlur } from "./popup";
@@ -37,14 +37,12 @@ const WIDGETS = [
   "start", "tray", "network", "volume", "battery", "clock", "date", "awake", "desktops",
 ] as const;
 let settings: Settings | null = null;
-let onSettings = () => {};
 /** The bar page's element order (arrange.ts); other pages have none. */
 let arrange: ReturnType<typeof arrangeElements> | null = null;
 function applySettings(s: Settings) {
   settings = s;
   arrange?.set(s.element_order);
   for (const w of WIDGETS) document.body.classList.toggle(`no-${w}`, !s[`show_${w}`]);
-  onSettings();
   document.body.classList.toggle("fill", s.fill);
   document.body.classList.toggle("blend", s.blend && !s.fill);
   if (!s.adaptive_color && !s.blend) applyTint(null);
@@ -384,20 +382,12 @@ function barPage() {
     invoke("open_overflow", { clientX: r.left + r.width / 2 });
   });
 
-  // --- Status icons (network, volume, battery) open Windows Quick Settings; music controls at the volume icon.
+  // --- Status icons (network, volume, battery) open Windows Quick Settings.
   mountStatus($("status"));
-  const volume = $("status").querySelector<HTMLElement>(".vol-wrap")!;
-  mountMiniMedia(volume);
 
   // --- Now Playing (Spotify, browsers, any app using Windows media controls).
   mountMedia($("media"));
-  let nowPlaying: NowPlaying | null = null;
-  const playing = (np: NowPlaying | null) => {
-    nowPlaying = np;
-    renderMedia($("media"), np);
-    renderMiniMedia(volume, np, settings?.volume_media ?? true);
-  };
-  onSettings = () => renderMiniMedia(volume, nowPlaying, settings?.volume_media ?? true);
+  const playing = (np: NowPlaying | null) => renderMedia($("media"), np);
   invoke<NowPlaying | null>("get_media").then(playing);
   me.listen<NowPlaying | null>("media", (e) => playing(e.payload));
 

@@ -42,8 +42,6 @@ pub struct Settings {
     pub show_date: bool,
     /// A short orange (Claude) / blue (Codex) glow on the usage widget when Claude Code or Codex finished a task.
     pub done_glow: bool,
-    /// Small play/pause/next controls that slide out of the volume icon while music plays.
-    pub volume_media: bool,
     /// Whether Pane has already set "Start with Windows" once. New installs start with it on (asked
     /// 2026-11-13); after that the user decides, in Pane or in Task Manager, and Pane never forces it again.
     pub autostart_set: bool,
@@ -133,7 +131,6 @@ impl Default for Settings {
             show_clock: true,
             show_date: true,
             done_glow: true,
-            volume_media: true,
             autostart_set: false,
             admin_warned: false,
             pin_order: Vec::new(),
@@ -181,7 +178,6 @@ impl Settings {
             "show_clock" => &mut self.show_clock,
             "show_date" => &mut self.show_date,
             "done_glow" => &mut self.done_glow,
-            "volume_media" => &mut self.volume_media,
             "autostart_set" => &mut self.autostart_set,
             "admin_warned" => &mut self.admin_warned,
             "win_key" => &mut self.win_key,
@@ -289,7 +285,7 @@ mod tests {
     fn old_or_partial_files_get_defaults() {
         let s: Settings = serde_json::from_str(r#"{"autohide":true}"#).unwrap();
         assert!(!s.autostart_set && !s.admin_warned, "an old file hasn't been asked about autostart or warned yet");
-        assert!(s.autohide && s.show_media && s.show_docker && s.show_start && s.done_glow && s.volume_media && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
+        assert!(s.autohide && s.show_media && s.show_docker && s.show_start && s.done_glow && !s.adaptive_color && !s.blend && !s.all_monitors && !s.low_memory && s.pin_order.is_empty());
         assert_eq!((s.glass, s.hide_delay_ms, s.slide_ms, s.size), (50, 700, 260, Size::Normal));
     }
 

@@ -244,7 +244,6 @@ export async function settingsPage() {
         toggle("show_tray", "Tray icons"),
         toggle("show_network", "Network"),
         toggle("show_volume", "Volume"),
-        toggle("volume_media", "Music controls at the volume icon"),
         toggle("show_battery", "Battery"),
         toggle("show_clock", "Time"),
         toggle("show_date", "Date"),

@@ -200,3 +200,4 @@ Each phase = one branch + PR. Gate = the user uses it daily before the next phas
 
 ### Ideas round, 2026-11-16 (the user's `ideas.md`)
 - **Bar over a fullscreen video:** only the foreground window was checked, so clicking anything else (another monitor, a popup) brought the bar back over a fullscreen YouTube video. `win::fullscreen_on` now also looks at the topmost app window on each monitor (z-order, minimized and other-desktop windows skipped); a frameless window covering the monitor there keeps the bar hidden (branch `fix-fullscreen-zorder`).
+- **No music controls at the volume icon** (the user found them redundant next to Now Playing): the pill, its dot and the `volume_media` setting are gone; an old `settings.json` still holding the key loads fine (unknown keys are ignored) (branch `remove-volume-music`).

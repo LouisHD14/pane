@@ -42,8 +42,8 @@ function batteryIcon(b: NonNullable<Status["battery"]>): [string, string] {
   return [svg(body + bolt), `Battery ${b.percent} %${b.charging ? ", charging" : ""}`];
 }
 
-/** Builds the three buttons once (volume in a wrapper that also holds the mini music controls, see
- * mountMiniMedia); renderStatus only fills them in. Volume opens the per-app volume mixer, the others
+/** Builds the three buttons once (volume in a wrapper, for the scroll wheel and its show switch); renderStatus
+ * only fills them in. Volume opens the per-app volume mixer, the others
  * Quick Settings (`data-open`). */
 export function mountStatus(el: HTMLElement) {
   el.innerHTML = `
