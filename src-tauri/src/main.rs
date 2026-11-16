@@ -10,6 +10,7 @@ mod extras;
 mod docker;
 mod http;
 mod media;
+mod notify;
 mod preview;
 mod settings;
 mod status;
@@ -1604,6 +1605,9 @@ fn main() {
                 push_apps(&h);
                 check_fullscreen(&h);
             });
+            // Notification counts on the app icons; a change sends the app lists again.
+            let h = handle.clone();
+            notify::watch(move || push_apps(&h));
             set_shown(&handle, true);
             watch_loop(handle.clone());
             status_loop(handle.clone());

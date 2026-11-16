@@ -28,7 +28,8 @@ type WinItem = {
   flashing: boolean;
   progress: Progress | null;
 };
-type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[] };
+/** `note`: notifications waiting in Windows' notification centre, or a Store app's badge ("3", "99+", "•"). */
+type AppItem = { id: string; name: string; icon: string; pinned: boolean; windows: WinItem[]; note: string };
 type Item = MenuItemOptions | PredefinedMenuItemOptions;
 
 /** Widget and element switches hide their part with a class on <body> (it keeps updating, it's just not shown). */
@@ -531,12 +532,18 @@ function updateAppButton(b: HTMLElement, app: AppItem) {
   b.dataset.id = app.id;
   // The app's badge (unread count / dot) from its first window that has one, like the Windows taskbar.
   const badged = app.windows.find((w) => w.badge);
-  const tip = badged?.badge_tip ? ` (${badged.badge_tip})` : "";
+  // Otherwise the notifications waiting in Windows' notification centre (or a Store app's badge), as a number.
+  const note = badged ? "" : app.note;
+  const noteText = note === "•" ? "new notifications" : note === "1" ? "1 notification" : `${note} notifications`;
+  const tip = badged?.badge_tip ? ` (${badged.badge_tip})` : note ? ` (${noteText})` : "";
   // Progress (a download, a copy) from its first window that has one, like the Windows taskbar.
   const progress = app.windows.find((w) => w.progress)?.progress;
-  b.title = (app.windows.length === 1 ? app.windows[0].title : app.name) + tip;
-  b.setAttribute("aria-label", app.name + tip + (progress ? `, ${progressText(progress)}` : ""));
-  b.classList.toggle("running", app.windows.length > 0);
+  const n = app.windows.length;
+  b.title = (n === 1 ? app.windows[0].title : n > 1 ? `${app.name} · ${n} windows` : app.name) + tip;
+  b.setAttribute("aria-label", app.name + (n > 1 ? `, ${n} windows` : "") + tip + (progress ? `, ${progressText(progress)}` : ""));
+  b.classList.toggle("running", n > 0);
+  // Several windows (minimized ones too): the running line splits in two, like a stack.
+  b.classList.toggle("multi", n > 1);
   b.classList.toggle("active", app.windows.some((w) => w.active));
   // Asks for attention (FlashWindowEx) until the window is brought to front.
   const flashing = app.windows.some((w) => w.flashing);
@@ -557,6 +564,17 @@ function updateAppButton(b: HTMLElement, app: AppItem) {
   }
   if (badged && badge!.src !== badged.badge) badge!.src = badged.badge;
   if (!badged) badge?.remove();
+  let count = b.querySelector<HTMLElement>(".notes");
+  if (note && !count) {
+    count = b.appendChild(Object.assign(document.createElement("span"), { className: "notes" }));
+    count.setAttribute("aria-hidden", "true"); // said in the label
+    once(count, "pop-in");
+  }
+  if (note && count!.textContent !== note) {
+    count!.textContent = note;
+    count!.classList.toggle("dot", note === "•"); // a Store glyph: "something new", no number
+  }
+  if (!note) count?.remove();
   // A thin bar under the icon in place of the running line; CSS colours it by state (data-state).
   let bar = b.querySelector<HTMLElement>(".progress");
   if (progress) {

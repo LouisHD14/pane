@@ -46,6 +46,9 @@ pub struct AppItem {
     pub icon: String,
     pub pinned: bool,
     pub windows: Vec<WinItem>,
+    /// Notifications waiting in Windows' notification centre, or a Store app's badge ("3", "99+", "•"), "" if
+    /// none (notify.rs). Shown when no window has its own overlay badge.
+    pub note: String,
 }
 
 #[derive(Serialize, Clone, PartialEq, Debug)]
@@ -133,7 +136,16 @@ const ICON_PX: i32 = 48;
 pub fn list(monitor: Option<RECT>) -> Vec<AppItem> {
     com();
     let pins = ordered(pins(), &crate::settings::get().pin_order);
-    group(&pins, &windows(monitor), info)
+    let wins = windows(monitor);
+    let mut items = group(&pins, &wins, info);
+    let notes = crate::notify::current();
+    if !notes.is_empty() {
+        for a in &mut items {
+            let aumids = wins.iter().filter(|w| a.windows.iter().any(|x| x.hwnd == w.hwnd)).map(|w| w.aumid.as_str());
+            a.note = crate::notify::note_for(&notes, &a.id, aumids);
+        }
+    }
+    items
 }
 
 /// Windows' pins in Pane's saved order: saved ids first in that order, pins the saved order doesn't know yet after
@@ -158,7 +170,7 @@ fn group(pins: &[Pin], wins: &[Win], info: impl Fn(&Win) -> (String, String)) ->
     let pin_of = |w: &Win| pins.iter().position(|p| pin_matches(p, w));
     let mut items: Vec<AppItem> = pins
         .iter()
-        .map(|p| AppItem { id: p.id.clone(), name: p.name.clone(), icon: p.icon.clone(), pinned: true, windows: vec![] })
+        .map(|p| AppItem { id: p.id.clone(), name: p.name.clone(), icon: p.icon.clone(), pinned: true, windows: vec![], note: String::new() })
         .collect();
     for w in wins {
         let at = match pin_of(w) {
@@ -171,7 +183,7 @@ fn group(pins: &[Pin], wins: &[Win], info: impl Fn(&Win) -> (String, String)) ->
                     None => {
                         let (name, icon) = info(w);
                         let name = if name.is_empty() { w.title.clone() } else { name };
-                        items.push(AppItem { id, name, icon, pinned: false, windows: vec![] });
+                        items.push(AppItem { id, name, icon, pinned: false, windows: vec![], note: String::new() });
                         items.len() - 1
                     }
                 }
