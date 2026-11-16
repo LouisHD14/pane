@@ -28,7 +28,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindowVisible, IsZoomed, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SW_HIDE, SW_SHOWNA,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SW_HIDE, SW_SHOWNA,
     SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CAPTION, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 
@@ -377,11 +377,37 @@ pub fn press(keys: &[VIRTUAL_KEY]) {
     unsafe { SendInput(&all, size_of::<INPUT>() as i32) };
 }
 
-/// True when the foreground window covers the whole `monitor` (a game or video in fullscreen).
+/// True when a fullscreen app (a game, or a video in fullscreen) is in front on `monitor`: the foreground window,
+/// or the topmost app window on that monitor. The second keeps a fullscreen video on one monitor fullscreen while
+/// the user clicks on another monitor (the bar used to come back over the video then, 2026-11-16).
 /// A maximized window doesn't count, also not with auto-hide on, where no edge is reserved and it covers the monitor.
 pub fn fullscreen_on(monitor: RECT) -> bool {
+    let fg = unsafe { GetForegroundWindow() };
+    if window_fullscreen(fg, monitor) {
+        return true;
+    }
+    let apps: Vec<(isize, RECT)> = crate::apps::taskbar_hwnds()
+        .into_iter()
+        .filter(|&h| !unsafe { IsIconic(h) }.as_bool())
+        .filter_map(|h| {
+            let mut r = RECT::default();
+            unsafe { GetWindowRect(h, &mut r) }.is_ok().then_some((h.0 as isize, r))
+        })
+        .collect();
+    first_on(&apps, monitor).is_some_and(|h| h != fg.0 as isize && window_fullscreen(HWND(h as _), monitor))
+}
+
+/// The first (topmost) of `windows` (z-order, top first) that reaches into `monitor`.
+fn first_on(windows: &[(isize, RECT)], m: RECT) -> Option<isize> {
+    windows
+        .iter()
+        .find(|(_, r)| r.left < m.right && r.right > m.left && r.top < m.bottom && r.bottom > m.top)
+        .map(|w| w.0)
+}
+
+/// `window` covers the whole `monitor` as a fullscreen app (not Pane, the desktop or a screen overlay).
+fn window_fullscreen(fg: HWND, monitor: RECT) -> bool {
     unsafe {
-        let fg = GetForegroundWindow();
         if fg.is_invalid() {
             return false;
         }
@@ -568,6 +594,18 @@ mod tests {
         assert!(!covers(RECT { left: -2560, top: 0, right: 0, bottom: 1440 }, monitor));
         // Maximized window: overhangs 8 px but stops above Pane's 48 px edge.
         assert!(!covers(RECT { left: -8, top: -8, right: 2568, bottom: 1400 }, monitor));
+    }
+
+    #[test]
+    fn topmost_window_on_each_monitor() {
+        let left = RECT { left: -2560, top: 0, right: 0, bottom: 1440 };
+        let main = RECT { left: 0, top: 0, right: 2560, bottom: 1440 };
+        // Top first: a small window on the left monitor, then a fullscreen video on the main one.
+        let windows = [(1, RECT { left: -900, top: 100, right: -100, bottom: 700 }), (2, main), (3, left)];
+        assert_eq!(first_on(&windows, main), Some(2));
+        assert_eq!(first_on(&windows, left), Some(1));
+        // Touching the edge isn't reaching in.
+        assert_eq!(first_on(&[(4, RECT { left: -800, top: 0, right: 0, bottom: 600 })], main), None);
     }
 
     #[test]
