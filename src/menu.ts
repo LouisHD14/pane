@@ -26,7 +26,6 @@ export type Settings = {
   show_clock: boolean;
   show_date: boolean;
   done_glow: boolean;
-  volume_media: boolean;
   /** Bar elements in the user's order (arrange.ts). */
   element_order: string[];
   /** Glass lightness 0 (dark) ..= 100 (light), 50 = the original look. */
@@ -158,7 +157,6 @@ export async function menuPage() {
       flip("show_weather", "Weather"),
       flip("show_docker", "Docker (while it runs)"),
       "-",
-      flip("volume_media", "Music controls at the volume icon"),
       flip("done_glow", "Glow when Claude / Codex finish"),
     ];
     const elementsPage = (): Entry[] => [
