@@ -450,6 +450,42 @@ body.no-tray .tray-zone {
   animation: pop 0.35s var(--spring);
 }
 
+/* Notifications waiting in Windows' notification centre (notify.rs): a small red count at the icon's top-right,
+   where the overlay badge (bottom-right) can't collide with it. */
+.app .notes {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: #e5484d;
+  box-shadow: 0 0 0 1.5px rgb(20 24 32 / 0.85);
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.app .notes.dot {
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  top: 6px;
+  right: 7px;
+  font-size: 0;
+}
+
+.app .notes.pop-in {
+  animation: pop 0.35s var(--spring);
+}
+
 /* Asks for attention (like Windows' orange taskbar button): warm tile that pulses a few times, then stays. */
 .app.flashing {
   background-color: rgba(255, 160, 50, 0.32);
@@ -505,6 +541,19 @@ body.no-tray .tray-zone {
 .app.active::after {
   width: 16px;
   background: var(--accent);
+}
+
+/* Several windows: the line splits into two dashes (a mask, so the running/active colour stays). */
+.app.multi::after {
+  width: 13px;
+  -webkit-mask: linear-gradient(90deg, #000 0 5px, transparent 5px 8px, #000 8px);
+  mask: linear-gradient(90deg, #000 0 5px, transparent 5px 8px, #000 8px);
+}
+
+.app.multi.active::after {
+  width: 20px;
+  -webkit-mask: linear-gradient(90deg, #000 0 8px, transparent 8px 12px, #000 12px);
+  mask: linear-gradient(90deg, #000 0 8px, transparent 8px 12px, #000 12px);
 }
 
 /* Progress (ITaskbarList3, e.g. a download): a thin bar under the icon in place of the running line. Green, yellow
