@@ -1367,8 +1367,8 @@ body.preview.preview-in {
   --brand: #7fd1b9;
 }
 
-/* ---------- "Done" glow (main.ts, agent-done): Claude Code (orange) or Codex (blue) finished a task. A shine
-   sweeps in from the left edge, then a soft glow stays there until the mouse comes by ("seen" fades it). */
+/* ---------- "Done" (main.ts, agent-done): Claude Code (orange) or Codex (blue) finished a task. A shine sweeps in
+   from the left edge once, then a ✓ badge stays on the logo until the mouse comes by ("seen" fades it). */
 .claude {
   position: relative;
   --glow: 255 138 76;
@@ -1394,19 +1394,45 @@ body.preview.preview-in {
   animation: done-shine 1.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
 }
 
-.claude.done.seen::before {
+/* The ✓ on the logo's top-right corner (logo: 20 px at 8 px from the left, centred in the 36 px widget). */
+.claude::after {
+  content: "\2713";
+  position: absolute;
+  left: 21px;
+  top: 3px;
+  width: 13px;
+  height: 13px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgb(var(--glow));
+  box-shadow: 0 0 0 1.5px rgb(20 24 32 / 0.9), 0 0 8px rgb(var(--glow) / 0.7);
+  color: #1a1206;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.3);
+}
+
+.claude.done::after {
+  animation: pop 0.35s var(--spring) 0.3s forwards;
+}
+
+.claude.done.seen::after {
   animation: done-fade 0.6s var(--ease) forwards;
 }
 
 @keyframes done-shine {
   0% { opacity: 0; transform: scaleX(0.2); transform-origin: left; }
   25% { opacity: 1; transform: scaleX(1.25); transform-origin: left; }
-  100% { opacity: 0.6; transform: scaleX(1); transform-origin: left; }
+  100% { opacity: 0; transform: scaleX(1); transform-origin: left; }
 }
 
 @keyframes done-fade {
-  from { opacity: 0.6; }
-  to { opacity: 0; }
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: scale(0.3); }
 }
 
 .codex svg {

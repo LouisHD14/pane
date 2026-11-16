@@ -55,8 +55,22 @@ function put(el: HTMLElement, html: string, tip: string) {
     el.innerHTML = html;
     el.dataset.html = html;
   }
+  el.dataset.tip = tip;
+  showTip(el);
+}
+
+/** The tooltip, with the "finished" line on top while the ✓ badge shows (see markDone). */
+function showTip(el: HTMLElement) {
+  const tip = (el.dataset.done ? `${el.dataset.done}\n` : "") + (el.dataset.tip ?? "");
   el.title = tip;
   el.setAttribute("aria-label", tip.replace(/\n/g, ". "));
+}
+
+/** Claude Code / Codex finished a task (main.ts agent-done): says so on the widget until it is cleared. */
+export function markDone(el: HTMLElement, on: boolean) {
+  if (on) el.dataset.done = `✓ ${el.id === "codex" ? "Codex" : "Claude Code"} finished a task (clears when the mouse comes by)`;
+  else delete el.dataset.done;
+  showTip(el);
 }
 
 export function renderClaude(el: HTMLElement, u: ClaudeUsage | null) {

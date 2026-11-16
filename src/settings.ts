@@ -236,7 +236,7 @@ export async function settingsPage() {
         toggle("show_usage", "CPU / GPU / RAM"),
         toggle("show_weather", "Weather"),
         toggle("show_docker", "Docker (only while Docker runs)"),
-        toggle("done_glow", "Glow when Claude Code / Codex finish a task"),
+        toggle("done_glow", "Show ✓ on the widget when Claude Code / Codex finish a task"),
       ),
       group(
         "Show on the bar",
