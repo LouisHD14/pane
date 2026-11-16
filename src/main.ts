@@ -10,7 +10,7 @@ import { closeOnBlur } from "./popup";
 import { renderWeather, type Report as WeatherReport } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
-import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
+import { markDone, renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
 import { applyTint } from "./tint";
 import { menuPage, type Settings } from "./menu";
 import { reorderPins } from "./reorder";
@@ -402,24 +402,31 @@ function barPage() {
   me.listen<CodexUsage | null>("codex", (e) => renderCodex($("codex"), e.payload));
   $("codex").addEventListener("click", () => invoke($("codex").classList.contains("relogin") ? "open_codex_login" : "open_codex_usage"));
 
-  // --- Claude Code / Codex finished a task: a shine sweeps in from the left of its widget, and a soft glow stays
-  // on its left edge until the mouse comes by (or 10 minutes pass), so it's seen even if the bar was hidden.
+  // --- Claude Code / Codex finished a task: a shine sweeps across its widget once, and a ✓ badge on its logo
+  // (plus a line on top of the tooltip) stays until the mouse comes by (or 10 minutes pass), so it's seen even
+  // if the bar was hidden. It used to be a soft glow on the left edge, which read as a glitch (2026-11-16).
   const glowTimers = new Map<HTMLElement, number>();
+  const clearDone = (el: HTMLElement) => {
+    el.classList.remove("done", "seen");
+    markDone(el, false);
+  };
   me.listen<"claude" | "codex">("agent-done", (e) => {
     const el = $(e.payload);
     if (el.hidden) return;
     el.classList.remove("seen");
     replay(el, "done");
+    markDone(el, true);
     clearTimeout(glowTimers.get(el));
-    glowTimers.set(el, window.setTimeout(() => el.classList.remove("done"), 10 * 60_000));
+    glowTimers.set(el, window.setTimeout(() => clearDone(el), 10 * 60_000));
   });
   for (const id of ["claude", "codex"]) {
     const el = $(id);
     el.addEventListener("mouseenter", () => {
-      if (!el.classList.contains("done")) return;
+      if (!el.classList.contains("done") || el.classList.contains("seen")) return;
       clearTimeout(glowTimers.get(el));
+      // The badge fades now; the tooltip line stays a few seconds so the hover can still show why.
       el.classList.add("seen");
-      el.addEventListener("animationend", () => el.classList.remove("done", "seen"), { once: true });
+      glowTimers.set(el, window.setTimeout(() => clearDone(el), 4000));
     });
   }
 

@@ -157,7 +157,7 @@ export async function menuPage() {
       flip("show_weather", "Weather"),
       flip("show_docker", "Docker (while it runs)"),
       "-",
-      flip("done_glow", "Glow when Claude / Codex finish"),
+      flip("done_glow", "✓ when Claude / Codex finish"),
     ];
     const elementsPage = (): Entry[] => [
       back(),
