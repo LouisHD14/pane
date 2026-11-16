@@ -1424,12 +1424,12 @@ async fn open_settings(app: AppHandle, window: WebviewWindow) -> tauri::Result<(
             ..Default::default()
         })
         .theme(Some(tauri::Theme::Dark))
-        .min_inner_size(360.0, 320.0)
+        .min_inner_size(420.0, 360.0)
         .visible(false)
         .build()?;
     if let Some((m, scale)) = place {
-        // 440 x 680 logical px, at most 90 % of the monitor.
-        let w = ((440.0 * scale) as i32).min((m.right - m.left) * 9 / 10);
+        // 820 x 680 logical px (nav + page), at most 90 % of the monitor.
+        let w = ((820.0 * scale) as i32).min((m.right - m.left) * 9 / 10);
         let h = ((680.0 * scale) as i32).min((m.bottom - m.top) * 9 / 10);
         // Position first: moving onto a monitor with another DPI rescales the window, the size then fixes it.
         settings.set_position(PhysicalPosition::new(m.left + (m.right - m.left - w) / 2, m.top + (m.bottom - m.top - h) / 2))?;
