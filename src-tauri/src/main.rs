@@ -389,10 +389,14 @@ fn check_fullscreen(app: &AppHandle) {
     if !SHOWN.load(SeqCst) {
         return;
     }
+    // Asked before taking the bars lock: fullscreen_on reads window titles, and for Pane's own windows Windows
+    // asks the main thread, which may be waiting for that very lock (0.11.0 froze at start like this, 2026-11-24).
+    let monitors: Vec<RECT> = bars(app).iter().map(|b| b.monitor).collect();
+    let states: Vec<(RECT, bool)> = monitors.into_iter().map(|m| (m, win::fullscreen_on(m))).collect();
     let changes: Vec<(String, bool, bool)> = bars(app)
         .iter_mut()
         .filter_map(|bar| {
-            let fullscreen = win::fullscreen_on(bar.monitor);
+            let fullscreen = states.iter().find(|(m, _)| *m == bar.monitor)?.1;
             (fullscreen != bar.fullscreen).then(|| {
                 bar.fullscreen = fullscreen;
                 (bar.label.clone(), fullscreen, bar.concealed)
@@ -424,11 +428,14 @@ static LAST_APPS: Mutex<Option<HashMap<String, Vec<apps::AppItem>>>> = Mutex::ne
 fn push_apps(app: &AppHandle) {
     let targets: Vec<(String, RECT)> = bars(app).iter().map(|b| (b.label.clone(), b.monitor)).collect();
     let all = settings::get().all_monitors;
+    // Listed before taking the lock: apps::list reads window titles, which for Pane's own windows waits on the
+    // main thread (see check_fullscreen).
+    let lists: Vec<(String, Vec<apps::AppItem>)> =
+        targets.into_iter().map(|(label, monitor)| (label, apps::list((!all).then_some(monitor)))).collect();
     let mut last = LAST_APPS.lock().unwrap_or_else(|e| e.into_inner());
     let last = last.get_or_insert_with(HashMap::new);
-    last.retain(|label, _| targets.iter().any(|(l, _)| l == label));
-    for (label, monitor) in targets {
-        let now = apps::list((!all).then_some(monitor));
+    last.retain(|label, _| lists.iter().any(|(l, _)| l == label));
+    for (label, now) in lists {
         if last.get(&label) != Some(&now) {
             let _ = app.emit_to(label.as_str(), "apps", &now);
             preview::apps_changed(&label, &now);
