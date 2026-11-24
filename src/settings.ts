@@ -288,10 +288,6 @@ export async function settingsPage() {
           toggle("show_weather", "weather_partly_cloudy_day", "Weather", "Temperature under the time. Click it for the forecast."),
           toggle("show_docker", "box_multiple", "Docker", "Running containers, only while Docker runs."),
         ),
-        section(
-          "Claude Code and Codex",
-          toggle("done_glow", "checkmark_circle", "Show ✓ when a task is done", "When Claude Code or Codex finish a task, a ✓ stays on the widget until the mouse comes by.", "done_glow"),
-        ),
         section("Your own widget", customWidget()),
       ],
     },

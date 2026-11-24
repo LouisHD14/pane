@@ -55,44 +55,33 @@ function put(el: HTMLElement, html: string, tip: string) {
     el.innerHTML = html;
     el.dataset.html = html;
   }
-  el.dataset.tip = tip;
-  showTip(el);
-}
-
-/** The tooltip, with the "finished" line on top while the ✓ badge shows (see markDone). */
-function showTip(el: HTMLElement) {
-  const tip = (el.dataset.done ? `${el.dataset.done}\n` : "") + (el.dataset.tip ?? "");
-  el.title = tip;
+  // Claude's widget has no tooltip: resting on it opens the sessions popup, which shows these lines.
+  if (el.id !== "claude") el.title = tip;
   el.setAttribute("aria-label", tip.replace(/\n/g, ". "));
 }
 
-/** Claude Code / Codex finished a task (main.ts agent-done): says so on the widget until it is cleared. */
-export function markDone(el: HTMLElement, on: boolean) {
-  if (on) el.dataset.done = `✓ ${el.id === "codex" ? "Codex" : "Claude Code"} finished a task (clears when the mouse comes by)`;
-  else delete el.dataset.done;
-  showTip(el);
+/** What the Claude widget says about the plan (limits, or local tokens), one fact per line. */
+export function claudeTip(u: ClaudeUsage): string {
+  if (u.source === "limits") return title("Claude", u);
+  return u.note.includes("login")
+    ? `Claude: ${u.note}\nClick to log in again`
+    : `Claude Code tokens in the last 5 hours: ${u.tokens_5h.toLocaleString()}\n${u.note}`;
 }
 
 export function renderClaude(el: HTMLElement, u: ClaudeUsage | null) {
   last = { el, u };
   el.hidden = !u;
   if (!u) return;
-  if (u.source === "limits") {
-    put(el, `${mark()}${limits(u)}`, title("Claude", u));
-  } else {
-    // The login expired and couldn't be renewed: say so instead of a token count that looks like a limit.
-    const relogin = u.note.includes("login");
-    put(
-      el,
-      relogin
-        ? `${mark()}<span class="local">Log in<small>Claude Code</small></span>`
-        : `${mark()}<span class="local">${tokens(u.tokens_5h)}<small>tokens · 5h</small></span>`,
-      relogin
-        ? `Claude: ${u.note}\nClick to log in again`
-        : `Claude Code tokens in the last 5 hours: ${u.tokens_5h.toLocaleString()}\n${u.note}`,
-    );
-  }
-  el.classList.toggle("relogin", u.source === "local" && u.note.includes("login"));
+  // The login expired and couldn't be renewed: say so instead of a token count that looks like a limit.
+  const relogin = u.source === "local" && u.note.includes("login");
+  const body =
+    u.source === "limits"
+      ? limits(u)
+      : relogin
+        ? `<span class="local">Log in<small>Claude Code</small></span>`
+        : `<span class="local">${tokens(u.tokens_5h)}<small>tokens · 5h</small></span>`;
+  put(el, mark() + body, claudeTip(u));
+  el.classList.toggle("relogin", relogin);
 }
 
 export function renderCodex(el: HTMLElement, u: CodexUsage | null) {

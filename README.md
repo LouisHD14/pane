@@ -42,8 +42,8 @@ Don't like it? **Right-click the bar → Quit Pane**, and the Windows taskbar is
 | **Window previews** | Hover a running app for live thumbnails of its windows, with close buttons and the app's own media buttons. |
 | **Tray icons** | The icons Windows shows, the rest behind the `^` arrow, with clicks and right-clicks passed through to the app. Follows *Settings → Personalization → Taskbar*. Windows' own volume, network and battery icons are left out — Pane draws those itself. |
 | **Now playing** | Cover, title, artist and play/pause/next for Spotify, a browser, anything using the Windows media controls. Compact controls also pop out of the volume icon on hover. |
-| **Claude usage** | Your 5-hour and weekly limits with reset times, read from Claude Code's login on this PC. An orange glow marks a finished task until you look at it. |
-| **Codex usage** | The same for a ChatGPT plan, from the Codex CLI's login. Blue glow. |
+| **Claude usage** | Your 5-hour and weekly limits with reset times, read from Claude Code's login on this PC. Rest the mouse on it to see your open Claude Code sessions (working or waiting); click one to bring its terminal to the front. |
+| **Codex usage** | The same for a ChatGPT plan, from the Codex CLI's login. |
 | **CPU / GPU / RAM** | Small meters matching Task Manager, plus network speed. Click for Task Manager. |
 | **Weather** | Temperature and an icon under the clock, from your Windows location and Open-Meteo. Says so plainly when it can't be read. |
 | **Docker** | While Docker runs: how many containers are up, and a popup to start, stop or restart each. Hidden otherwise. |
@@ -57,7 +57,7 @@ Pane puts a bar on **every monitor**, each showing that monitor's windows, and g
 **Right-click the bar → Settings** for three short pages:
 
 - **Bar** — auto-hide, fill the screen edge, match the colour of the apps above it, show apps from all monitors
-- **Widgets** — now playing, Claude, Codex, system load, weather, Docker, the music controls, the finished-task glow
+- **Widgets** — now playing, Claude, Codex, system load, weather, Docker, the music controls
 - **Show on the bar** — Start, tray, network, volume, battery, time, date
 
 **More settings…** opens a window with glass lightness, bar height (small / normal / large), auto-hide timing (with a "Taskbar-like" preset), low-memory mode, release download counts and **Report a bug…**.
@@ -97,7 +97,7 @@ Pane puts a bar on **every monitor**, each showing that monitor's windows, and g
 Nothing leaves your PC except the requests below. Settings and logs stay in `%LOCALAPPDATA%\org.gruening.pane`.
 
 - **Claude and Codex usage** read the logins those tools already keep on this PC (`~/.claude/.credentials.json`, `~/.codex/auth.json`). They're sent only to Anthropic and OpenAI to read your usage, and renewed the same way the CLIs do. Pane never logs them.
-- **The finished-task glow** reads the end of Claude Code's and Codex's own conversation files (`~/.claude/projects`, `~/.codex/sessions`) when they change. Nothing from them is sent or logged.
+- **The Claude Code sessions popup** reads Claude Code's own list of running sessions (`~/.claude/sessions`: name, folder, working or waiting) only while the popup is open. Nothing from it is sent or logged.
 - **Weather** sends your rounded location to [Open-Meteo](https://open-meteo.com). No key, no account.
 - **Docker** talks to Docker's local pipe only.
 - **Updates and download counts** are read from GitHub.
@@ -145,7 +145,7 @@ src-tauri/src/weather.rs  Windows location + Open-Meteo
 src-tauri/src/usage.rs    CPU / GPU / RAM load and network speed
 src-tauri/src/claude.rs   Claude plan limits (Claude Code login, renewed when expired)
 src-tauri/src/codex.rs    Codex plan limits (Codex CLI login, renewed when expired)
-src-tauri/src/agents.rs   Notices when Claude Code or Codex finishes a task
+src-tauri/src/sessions.rs Open Claude Code sessions for the popup over the Claude widget
 src-tauri/src/docker.rs   Containers, over Docker's local pipe
 src-tauri/src/colors.rs   The colours of the app above the bar (adaptive colour)
 src-tauri/src/settings.rs Settings, checked and clamped

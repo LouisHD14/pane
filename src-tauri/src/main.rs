@@ -1,7 +1,6 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod agents;
 mod apps;
 mod claude;
 mod codex;
@@ -12,6 +11,7 @@ mod http;
 mod media;
 mod notify;
 mod preview;
+mod sessions;
 mod settings;
 mod status;
 mod tray;
@@ -81,7 +81,7 @@ static POPUPS_OPEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static POPUPS_KEPT: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
 const KEEP: Duration = Duration::from_secs(120);
 /// The popup kinds a bar can have (label prefix).
-const POPUP_KINDS: [&str; 4] = ["overflow", "menu", "docker", "egg"];
+const POPUP_KINDS: [&str; 5] = ["overflow", "menu", "docker", "egg", "agents"];
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -1373,8 +1373,68 @@ async fn fit_popup(app: AppHandle, window: WebviewWindow, width: f64, height: f6
     let y = at.y - h - gap;
     window.set_size(PhysicalSize::new(w as u32, h as u32))?;
     window.set_position(PhysicalPosition::new(x, y))?;
+    if label.starts_with("agents-") {
+        // Opened by hovering: the terminal the user types in keeps the focus, and leaving closes it.
+        win::show_inactive(HWND(window.hwnd()?.0));
+        close_when_left(window);
+        return Ok(());
+    }
     window.show()?;
     window.set_focus()
+}
+
+/// The widget the sessions popup belongs to, in screen px (set by `open_agents`).
+static AGENTS_ANCHOR: Mutex<Option<RECT>> = Mutex::new(None);
+static AGENTS_WATCHED: AtomicBool = AtomicBool::new(false);
+
+/// Closes the hover popup once the mouse has left the widget, the popup and the gap between them for a
+/// moment (the same rule as the app preview). Runs only while the popup is open.
+fn close_when_left(window: WebviewWindow) {
+    if AGENTS_WATCHED.swap(true, SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let label = window.label().to_string();
+        let mut away = 0;
+        while lock(&POPUPS_OPEN).contains(&label) {
+            std::thread::sleep(Duration::from_millis(80));
+            let anchor = lock(&AGENTS_ANCHOR).unwrap_or_default();
+            // Read each time: the page measures itself again while it is open.
+            let (Ok(at), Ok(size)) = (window.outer_position(), window.outer_size()) else { break };
+            let popup = RECT { left: at.x, top: at.y, right: at.x + size.width as i32, bottom: at.y + size.height as i32 };
+            let here = win::cursor().is_some_and(|p| preview::inside(p, anchor, popup));
+            away = if here { 0 } else { away + 1 };
+            if away >= 4 {
+                close_popup(window.clone());
+                break;
+            }
+        }
+        AGENTS_WATCHED.store(false, SeqCst);
+    });
+}
+
+/// The mouse rests on the Claude widget: the open Claude Code sessions above it. `left`/`right`: the
+/// widget's edges in CSS px inside the bar.
+#[tauri::command]
+async fn open_agents(app: AppHandle, window: WebviewWindow, left: f64, right: f64) -> tauri::Result<()> {
+    let label = format!("agents-{}", window.label());
+    if lock(&POPUPS_OPEN).contains(&label) {
+        return Ok(()); // already up (open_fitted would focus it)
+    }
+    let (scale, at, size) = (window.scale_factor()?, window.outer_position()?, window.outer_size()?);
+    let px = |v: f64| at.x + (v * scale).round() as i32;
+    *lock(&AGENTS_ANCHOR) = Some(RECT { left: px(left), right: px(right), top: at.y, bottom: at.y + size.height as i32 });
+    open_fitted(&app, label, (left + right) / 2.0, false).await
+}
+
+/// The live Claude Code sessions, each with its terminal window when one is open.
+#[tauri::command]
+async fn get_sessions() -> Vec<sessions::Session> {
+    let wins: Vec<(isize, String)> = lock(&LAST_APPS)
+        .as_ref()
+        .map(|all| all.values().flatten().flat_map(|a| a.windows.iter().map(|w| (w.hwnd, w.title.clone()))).collect())
+        .unwrap_or_default();
+    sessions::list(&wins)
 }
 
 /// Closes a popup (tray overflow, Pane menu, Docker) or the settings window (Escape). Popups are hidden and
@@ -1393,6 +1453,12 @@ fn close_popup(window: WebviewWindow) {
         return;
     }
     let _ = window.hide();
+    if label.starts_with("agents-") {
+        // Shown with show_inactive, which Tauri's hide() doesn't know about.
+        if let Ok(h) = window.hwnd() {
+            win::hide(HWND(h.0));
+        }
+    }
     if was_open {
         lock(&POPUPS_KEPT).push((label.clone(), Instant::now()));
         let _ = window.emit_to(label.as_str(), "popup-closed", ());
@@ -1585,6 +1651,8 @@ fn main() {
             get_docker,
             docker_action,
             open_docker,
+            open_agents,
+            get_sessions,
             open_docker_desktop,
             open_egg,
             egg_rules,
@@ -1622,12 +1690,6 @@ fn main() {
             docker_loop(handle.clone());
             let h = handle.clone();
             std::thread::spawn(move || autostart_first_run(&h));
-            let h = handle.clone();
-            agents::watch(move |agent| {
-                if SHOWN.load(SeqCst) && settings::get().done_glow {
-                    let _ = h.emit("agent-done", agent.name());
-                }
-            });
             update::watch(handle.clone());
             let m = handle.clone();
             media::watch(move || {
