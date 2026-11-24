@@ -4,13 +4,14 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { mountStatus, renderStatus, type Status } from "./status";
 import { renderTray, type TrayIcon } from "./tray";
 import { mountMedia, renderMedia, type NowPlaying } from "./media";
+import { agentsPage } from "./sessions";
 import { dockerPage, renderDocker, type Docker } from "./docker";
 import { eggPage } from "./egg";
 import { closeOnBlur } from "./popup";
 import { renderWeather, type Report as WeatherReport } from "./weather";
 import { renderUsage, type Usage } from "./usage";
 import { once, replay } from "./anim";
-import { markDone, renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
+import { renderClaude, renderCodex, setClaudeLogo, type ClaudeUsage, type CodexUsage } from "./claude";
 import { applyTint } from "./tint";
 import { menuPage, type Settings } from "./menu";
 import { reorderPins } from "./reorder";
@@ -78,6 +79,7 @@ else if (me.label.startsWith("menu-")) menuPage();
 else if (me.label.startsWith("preview-")) previewPage();
 else if (me.label.startsWith("docker-")) dockerPage();
 else if (me.label.startsWith("egg-")) eggPage();
+else if (me.label.startsWith("agents-")) agentsPage();
 else if (me.label === "settings") settingsPage();
 else barPage();
 
@@ -397,39 +399,21 @@ function barPage() {
   invoke<string>("claude_icon").then((url) => url && setClaudeLogo(url));
   me.listen<ClaudeUsage | null>("claude", (e) => renderClaude($("claude"), e.payload));
   $("claude").addEventListener("click", () => invoke($("claude").classList.contains("relogin") ? "open_claude_login" : "open_claude_usage"));
+  // Resting on it shows the open Claude Code sessions (and the limits) in a popup instead of a tooltip.
+  warmOnHover($("claude"), "agents");
+  let agentsTimer = 0;
+  $("claude").addEventListener("mouseenter", () => {
+    agentsTimer = window.setTimeout(() => {
+      const r = $("claude").getBoundingClientRect();
+      invoke("open_agents", { left: r.left, right: r.right });
+    }, 300);
+  });
+  $("claude").addEventListener("mouseleave", () => clearTimeout(agentsTimer));
 
   // --- Codex plan usage (shown when the Codex CLI is logged in with ChatGPT); a click opens chatgpt.com's usage.
   invoke<CodexUsage | null>("get_codex").then((u) => renderCodex($("codex"), u));
   me.listen<CodexUsage | null>("codex", (e) => renderCodex($("codex"), e.payload));
   $("codex").addEventListener("click", () => invoke($("codex").classList.contains("relogin") ? "open_codex_login" : "open_codex_usage"));
-
-  // --- Claude Code / Codex finished a task: a shine sweeps across its widget once, and a ✓ badge on its logo
-  // (plus a line on top of the tooltip) stays until the mouse comes by (or 10 minutes pass), so it's seen even
-  // if the bar was hidden. It used to be a soft glow on the left edge, which read as a glitch (2026-11-16).
-  const glowTimers = new Map<HTMLElement, number>();
-  const clearDone = (el: HTMLElement) => {
-    el.classList.remove("done", "seen");
-    markDone(el, false);
-  };
-  me.listen<"claude" | "codex">("agent-done", (e) => {
-    const el = $(e.payload);
-    if (el.hidden) return;
-    el.classList.remove("seen");
-    replay(el, "done");
-    markDone(el, true);
-    clearTimeout(glowTimers.get(el));
-    glowTimers.set(el, window.setTimeout(() => clearDone(el), 10 * 60_000));
-  });
-  for (const id of ["claude", "codex"]) {
-    const el = $(id);
-    el.addEventListener("mouseenter", () => {
-      if (!el.classList.contains("done") || el.classList.contains("seen")) return;
-      clearTimeout(glowTimers.get(el));
-      // The badge fades now; the tooltip line stays a few seconds so the hover can still show why.
-      el.classList.add("seen");
-      glowTimers.set(el, window.setTimeout(() => clearDone(el), 4000));
-    });
-  }
 
   // --- Docker: running containers while Docker runs; a click shows them all in a popup.
   invoke<Docker | null>("get_docker").then((d) => renderDocker($("docker"), d));

@@ -4,7 +4,7 @@
 
 import type { Settings } from "./menu";
 
-export type PictureKey = "fill" | "adaptive_color" | "blend" | "autohide" | "all_monitors" | "done_glow";
+export type PictureKey = "fill" | "adaptive_color" | "blend" | "autohide" | "all_monitors";
 
 // Colours of the drawings: wallpaper, the bar's dark glass, an app with a green sidebar on a cream page.
 const WALL = `<rect width="112" height="64" rx="4" fill="#23406f"/><circle cx="84" cy="18" r="22" fill="#2f5aa0" opacity=".55"/>`;
@@ -38,16 +38,6 @@ const monitors = (left: string[], right: string[]) => {
   return one(3, left) + one(59, right);
 };
 
-/** The Claude usage widget, with the ✓ badge when `done`. */
-const widget = (done: boolean) =>
-  `<rect width="112" height="64" rx="4" fill="#1d2433"/><rect x="18" y="20" width="76" height="24" rx="6" fill="rgba(255,255,255,.08)"/>` +
-  `<rect x="24" y="25" width="14" height="14" rx="3" fill="#d97757"/>` +
-  `<rect x="46" y="27" width="30" height="3" rx="1.5" fill="rgba(255,255,255,.25)"/><rect x="46" y="27" width="6" height="3" rx="1.5" fill="#d97757"/>` +
-  `<rect x="46" y="34" width="30" height="3" rx="1.5" fill="rgba(255,255,255,.25)"/><rect x="46" y="34" width="12" height="3" rx="1.5" fill="#d97757"/>` +
-  (done
-    ? `<circle cx="38" cy="24" r="5.5" fill="#ff8a4c" stroke="#1d2433" stroke-width="1.5"/><path d="M35.6 24.1l1.6 1.6 3-3.2" fill="none" stroke="#1a1206" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`
-    : "");
-
 const DRAW: Record<PictureKey, [off: string, on: string]> = {
   fill: [WALL + bar(GLASS), WALL + bar(GLASS, true)],
   adaptive_color: [app(50) + bar(GLASS), TINT + app(50) + bar("url(#tint)")],
@@ -61,7 +51,6 @@ const DRAW: Record<PictureKey, [off: string, on: string]> = {
       `<path d="M56 50l-3.5 4h2.3v4h2.4v-4h2.3z" fill="#fff" stroke="#000" stroke-width=".6"/>`,
   ],
   all_monitors: [monitors(["#5aa9ff"], ["#ffb347"]), monitors(["#5aa9ff", "#ffb347"], ["#5aa9ff", "#ffb347"])],
-  done_glow: [widget(false), widget(true)],
 };
 
 /** "Off | On" drawings for a switch; `track` registers the outline update for when the setting changes. */

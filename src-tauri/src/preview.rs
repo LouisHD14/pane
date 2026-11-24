@@ -426,7 +426,7 @@ fn same_cards(a: &[WinItem], b: &[WinItem]) -> bool {
 }
 
 /// The cursor counts as "still here" over the icon, the popup, and the gap between them.
-fn inside((x, y): (i32, i32), anchor: RECT, popup: RECT) -> bool {
+pub fn inside((x, y): (i32, i32), anchor: RECT, popup: RECT) -> bool {
     let within = |r: RECT| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
     let bridge = RECT { left: anchor.left.max(popup.left), right: anchor.right.min(popup.right), top: popup.bottom, bottom: anchor.top };
     within(anchor) || within(popup) || within(bridge)
