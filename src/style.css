@@ -544,16 +544,55 @@ body.no-tray .tray-zone {
 }
 
 /* Several windows: the line splits into two dashes (a mask, so the running/active colour stays). */
-.app.multi::after {
-  width: 13px;
-  -webkit-mask: linear-gradient(90deg, #000 0 5px, transparent 5px 8px, #000 8px);
-  mask: linear-gradient(90deg, #000 0 5px, transparent 5px 8px, #000 8px);
+/* Several windows: the line plus a small round dot beside it (▬ •), centred as a pair, in the line's colour.
+   It replaced a line cut in two by a mask, whose square inner ends looked broken (the user's ideas.md, 2026-11-25).
+   Geometry: a 3 px gap and a 3 px dot after the line; the line moves left by half of that. */
+.app::before {
+  content: "";
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0;
+  transform: scale(0);
+  transition: opacity 0.2s var(--ease), transform 0.3s var(--spring), left 0.3s var(--spring), background-color 0.3s var(--ease);
+  pointer-events: none;
 }
 
-.app.multi.active::after {
-  width: 20px;
-  -webkit-mask: linear-gradient(90deg, #000 0 8px, transparent 8px 12px, #000 12px);
-  mask: linear-gradient(90deg, #000 0 8px, transparent 8px 12px, #000 12px);
+.app.multi::before {
+  left: calc(50% + 3px);
+  opacity: 1;
+  transform: none;
+}
+
+.app.multi::after {
+  transform: translateX(-6px);
+  transition: width 0.3s var(--spring), transform 0.3s var(--spring), background-color 0.3s var(--ease);
+}
+
+.app.multi.active::before,
+.app.multi.flashing::before {
+  left: calc(50% + 8px);
+}
+
+.app.multi.active::after,
+.app.multi.flashing::after {
+  transform: translateX(-11px);
+}
+
+.app.multi.active::before {
+  background: var(--accent);
+}
+
+.app.multi.flashing::before {
+  background: #ffb347;
+}
+
+.app.multi.progressing::before {
+  opacity: 0;
 }
 
 /* Progress (ITaskbarList3, e.g. a download): a thin bar under the icon in place of the running line. Green, yellow
