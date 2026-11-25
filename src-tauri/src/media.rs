@@ -64,20 +64,23 @@ pub fn control(action: Action) {
 /// Calls `on_change` (debounced ~150 ms, from a background thread) when the current session, its track,
 /// play state or position changes. Follows the current session when it switches apps.
 pub fn watch(on_change: impl Fn() + Send + Sync + 'static) {
-    if CACHE.set(Mutex::new(read())).is_err() {
+    if CACHE.set(Mutex::new(None)).is_err() {
         return; // already watching
     }
-    let Some(manager) = manager() else { return };
-    // true = the current session changed, subscribe to the new one.
-    let (tx, rx) = channel::<bool>();
-    let session_tx = tx.clone();
-    let _ = manager.CurrentSessionChanged(&TypedEventHandler::new(move |_, _| {
-        let _ = session_tx.send(true);
-        Ok(())
-    }));
-    let _ = tx.send(true);
+    // Everything here waits on Windows' media service (`join()`), so none of it may run on the main thread:
+    // Pane called `read()` from its setup there, and with some sessions open (cover art) the answer never
+    // came, which froze the whole bar at start (2026-11-25). The first read follows on this thread.
     std::thread::spawn(move || {
         mta();
+        let Some(manager) = manager() else { return };
+        // true = the current session changed, subscribe to the new one.
+        let (tx, rx) = channel::<bool>();
+        let session_tx = tx.clone();
+        let _ = manager.CurrentSessionChanged(&TypedEventHandler::new(move |_, _| {
+            let _ = session_tx.send(true);
+            Ok(())
+        }));
+        let _ = tx.send(true);
         let mut subscribed: Option<(Session, [i64; 3])> = None;
         while let Ok(first) = rx.recv() {
             std::thread::sleep(Duration::from_millis(150));
