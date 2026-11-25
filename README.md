@@ -38,7 +38,7 @@ Don't like it? **Right-click the bar → Quit Pane**, and the Windows taskbar is
 | | What it does |
 | --- | --- |
 | **Start** | Opens the real Start menu. |
-| **Pinned and running apps** | Your Windows pins, then open apps, centred like Windows 11. Click to start, focus or minimise; drag to reorder; right-click for windows, "New window" and "Close". Badges, progress bars and attention flashing like the real taskbar. |
+| **Pinned and running apps** | Your Windows pins, then open apps, centred like Windows 11. Click to start, focus or minimise; drag to reorder; right-click for windows, "New window", "Close" and "Pin / Unpin from taskbar". Unpinning uses Windows' own unpin, so the Windows taskbar loses the pin too (Windows refuses that for File Explorer: Pane then only hides it). Pinning stays in Pane, because Windows lets no program add taskbar pins. Badges, progress bars and attention flashing like the real taskbar. |
 | **Window previews** | Hover a running app for live thumbnails of its windows, with close buttons and the app's own media buttons. |
 | **Tray icons** | The icons Windows shows, the rest behind the `^` arrow, with clicks and right-clicks passed through to the app. Follows *Settings → Personalization → Taskbar*. Windows' own volume, network and battery icons are left out — Pane draws those itself. |
 | **Now playing** | Cover, title, artist and play/pause/next for Spotify, a browser, anything using the Windows media controls. Compact controls also pop out of the volume icon on hover. |

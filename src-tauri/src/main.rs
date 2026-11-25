@@ -1035,6 +1035,25 @@ async fn launch(id: String) {
     apps::launch(&id);
 }
 
+/// "Pin to taskbar" in an app's menu: pinned in Pane (Windows lets no program pin to its taskbar).
+#[tauri::command]
+async fn pin_app(app: AppHandle, id: String) {
+    apps::pin_app(&id);
+    push_apps(&app);
+}
+
+/// "Unpin from taskbar": Pane's own pin, or Windows' pin through Windows' own unpin. Explorer rewrites its pin
+/// list a moment later, so the bars are refreshed after that.
+#[tauri::command]
+async fn unpin_app(app: AppHandle, id: String) {
+    if let Err(e) = apps::unpin_app(&id) {
+        win::log(&format!("unpin failed: {e}"));
+    }
+    push_apps(&app);
+    std::thread::sleep(Duration::from_millis(600));
+    push_apps(&app);
+}
+
 #[tauri::command]
 async fn get_media() -> Option<media::NowPlaying> {
     media::current()
@@ -1659,6 +1678,8 @@ fn main() {
             docker_action,
             open_docker,
             open_agents,
+            pin_app,
+            unpin_app,
             get_sessions,
             open_docker_desktop,
             open_egg,
