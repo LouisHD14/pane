@@ -48,6 +48,11 @@ pub struct Settings {
     /// The user's own order of the pinned apps (app ids), set by dragging them in the bar. Only Pane's order:
     /// Windows' own taskbar pins stay as they are. Empty: Windows' pin order.
     pub pin_order: Vec<String>,
+    /// Apps pinned in Pane (app ids: AppUserModelID or exe path) on top of Windows' own taskbar pins; Windows
+    /// lets no program add to its pins, so these show in Pane only (issue #26, 2026-11-25).
+    pub extra_pins: Vec<String>,
+    /// Windows pins unpinned in Pane where Windows refused to unpin them (File Explorer): hidden in Pane only.
+    pub hidden_pins: Vec<String>,
     /// The user's order of the bar's elements (main.ts `ELEMENTS` keys: "claude", "usage", "clock", …), set by
     /// dragging them along their side of the bar. Empty: the built-in order.
     pub element_order: Vec<String>,
@@ -131,6 +136,8 @@ impl Default for Settings {
             autostart_set: false,
             admin_warned: false,
             pin_order: Vec::new(),
+            extra_pins: Vec::new(),
+            hidden_pins: Vec::new(),
             element_order: Vec::new(),
             glass: 50,
             opacity: 50,
@@ -253,6 +260,16 @@ pub fn set(key: &str, value: &Value) -> Option<Settings> {
 }
 
 /// Saves the pinned apps' order (app ids, first = leftmost).
+/// Saves the Windows pins hidden in Pane.
+pub fn set_hidden_pins(ids: Vec<String>) -> Settings {
+    save(Settings { hidden_pins: ids, ..get() })
+}
+
+/// Saves the apps pinned in Pane.
+pub fn set_extra_pins(ids: Vec<String>) -> Settings {
+    save(Settings { extra_pins: ids, ..get() })
+}
+
 pub fn set_pin_order(order: Vec<String>) -> Settings {
     save(Settings { pin_order: order, ..get() })
 }

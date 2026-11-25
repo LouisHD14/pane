@@ -30,7 +30,7 @@ use windows::Win32::UI::Controls::{ImageList_Destroy, ImageList_GetIcon, ImageLi
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::{
-    IShellItem2, IShellItemImageFactory, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHCreateMemStream,
+    BHID_SFUIObject, GCS_VERBW, IContextMenu, IShellItem, IShellItem2, IShellItemImageFactory, CMF_NORMAL, CMINVOKECOMMANDINFO, SHCreateItemFromIDList, SHCreateItemFromParsingName, SHCreateMemStream,
     SHLockShared, SHUnlockShared, ShellExecuteW, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, SIIGBF_ICONONLY,
     THBF_DISABLED, THBF_DISMISSONCLICK, THBF_HIDDEN, THBF_NOBACKGROUND, THBF_NONINTERACTIVE, THBN_CLICKED,
     THB_BITMAP, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTONFLAGS, THUMBBUTTONMASK,
@@ -916,17 +916,114 @@ fn nonempty(s: PWSTR) -> Option<String> {
 
 // ---- pins ----
 
-static PINS: Mutex<(Vec<u8>, Vec<Pin>)> = Mutex::new((Vec::new(), Vec::new()));
+static PINS: Mutex<(Vec<u8>, Vec<String>, Vec<Pin>)> = Mutex::new((Vec::new(), Vec::new(), Vec::new()));
 
 /// The user's taskbar pins in their order. Re-read only when Explorer's pin list changes.
 fn pins() -> Vec<Pin> {
     let raw = favorites();
+    let extra = crate::settings::get().extra_pins;
     let mut cache = PINS.lock().unwrap();
-    if cache.0 != raw || cache.1.is_empty() && !raw.is_empty() {
-        let pins = split_favorites(&raw).into_iter().filter_map(pin).collect();
-        *cache = (raw, pins);
+    if cache.0 != raw || cache.1 != extra || cache.2.is_empty() && !(raw.is_empty() && extra.is_empty()) {
+        let mut pins: Vec<Pin> = split_favorites(&raw).into_iter().filter_map(pin).collect();
+        for id in &extra {
+            if !pins.iter().any(|p| p.id.eq_ignore_ascii_case(id)) {
+                pins.extend(extra_pin(id));
+            }
+        }
+        *cache = (raw, extra, pins);
     }
-    cache.1.clone()
+    // Windows pins the user unpinned in Pane where Windows refused (File Explorer): left out here only.
+    let hidden = crate::settings::get().hidden_pins;
+    cache.2.iter().filter(|p| !hidden.iter().any(|h| h.eq_ignore_ascii_case(&p.id))).cloned().collect()
+}
+
+/// A pin the user added in Pane: an app id (AppUserModelID or exe path). Windows lets no program pin to its own
+/// taskbar (the "Pin to taskbar" verb is only offered to Explorer), so these live in Pane's settings only.
+fn extra_pin(id: &str) -> Option<Pin> {
+    let exe = id.contains('\\');
+    let target = if exe { id.to_string() } else { format!("shell:AppsFolder\\{id}") };
+    let item: IShellItem2 = unsafe { SHCreateItemFromParsingName(&HSTRING::from(target.as_str()), None) }.ok()?;
+    let described = exe.then(|| unsafe { item.GetString(&PKEY_FileDescription) }.ok().and_then(nonempty)).flatten();
+    let name = described.or_else(|| unsafe { item.GetDisplayName(SIGDN_NORMALDISPLAY) }.ok().and_then(nonempty));
+    Some(Pin {
+        id: id.to_string(),
+        aumid: if exe { String::new() } else { id.to_string() },
+        exe: if exe { id.to_lowercase() } else { String::new() },
+        name: name.unwrap_or_default(),
+        icon: icon(&item.cast().ok()?),
+        target,
+    })
+}
+
+/// Pins a running app to Pane's bar (Pane only, see `extra_pin`).
+pub fn pin_app(id: &str) {
+    // A Windows pin hidden in Pane comes back as it was.
+    let mut hidden = crate::settings::get().hidden_pins;
+    if hidden.iter().any(|h| h.eq_ignore_ascii_case(id)) {
+        hidden.retain(|h| !h.eq_ignore_ascii_case(id));
+        crate::settings::set_hidden_pins(hidden);
+        return;
+    }
+    let mut extra = crate::settings::get().extra_pins;
+    if !extra.iter().any(|e| e.eq_ignore_ascii_case(id)) {
+        extra.push(id.to_string());
+        crate::settings::set_extra_pins(extra);
+    }
+}
+
+/// Unpins an app: Pane's own pin is dropped; a Windows pin goes through Windows' own "Unpin from taskbar"
+/// (verb "taskbarunpin" on the pin's shortcut or Store-app item), so Windows' taskbar loses it too. Windows offers
+/// that verb to other programs for most pins but not for File Explorer (checked 2026-11-25); such a pin is then
+/// hidden in Pane only.
+pub fn unpin_app(id: &str) -> Result<(), String> {
+    let mut extra = crate::settings::get().extra_pins;
+    if extra.iter().any(|e| e.eq_ignore_ascii_case(id)) {
+        extra.retain(|e| !e.eq_ignore_ascii_case(id));
+        crate::settings::set_extra_pins(extra);
+        return Ok(());
+    }
+    com();
+    let pin = pins().into_iter().find(|p| p.id == id).ok_or("not pinned")?;
+    if let Err(e) = invoke_verb(&pin.target, "taskbarunpin") {
+        let mut hidden = crate::settings::get().hidden_pins;
+        hidden.push(id.to_string());
+        crate::settings::set_hidden_pins(hidden);
+        return Err(format!("Windows refused ({e}), hidden in Pane only"));
+    }
+    Ok(())
+}
+
+/// Whether a filled context menu has the command `verb` (some are only offered to Explorer itself).
+fn offers(menu: &IContextMenu, verb: &str) -> bool {
+    (0..0x7FFEusize).take(400).any(|i| {
+        let mut buf = [0u16; 64];
+        let got = unsafe { menu.GetCommandString(i, GCS_VERBW, None, windows::core::PSTR(buf.as_mut_ptr() as _), 64) };
+        got.is_ok() && String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)]) == verb
+    })
+}
+
+/// Runs a shell item's context-menu command by its language-independent name, as Explorer's menu would.
+fn invoke_verb(path: &str, verb: &str) -> Result<(), String> {
+    unsafe {
+        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), None).map_err(|e| e.to_string())?;
+        let menu: IContextMenu = item.BindToHandler(None, &BHID_SFUIObject).map_err(|e| e.to_string())?;
+        let popup = CreatePopupMenu().map_err(|e| e.to_string())?;
+        let _ = menu.QueryContextMenu(popup, 0, 1, 0x7FFF, CMF_NORMAL);
+        if !offers(&menu, verb) {
+            let _ = DestroyMenu(popup);
+            return Err("not offered".into());
+        }
+        let verb_c = std::ffi::CString::new(verb).map_err(|e| e.to_string())?;
+        let info = CMINVOKECOMMANDINFO {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
+            lpVerb: windows::core::PCSTR(verb_c.as_ptr() as _),
+            nShow: SW_SHOWNORMAL.0,
+            ..Default::default()
+        };
+        let result = menu.InvokeCommand(&info).map_err(|e| e.to_string());
+        let _ = DestroyMenu(popup);
+        result
+    }
 }
 
 /// Explorer's pin list, HKCU\...\Explorer\Taskband "Favorites".
@@ -1131,6 +1228,35 @@ mod tests {
         let items = group(&[], &[w], |_| ("Chat".into(), String::new()));
         let item = &items[0].windows[0];
         assert_eq!((item.badge.as_str(), item.badge_tip.as_str(), item.flashing), ("data:2", "1 new", true));
+    }
+
+    /// Checks on this PC, without changing anything: Windows offers "taskbarunpin" on each real pin, and Pane pins
+    /// build from an exe and a Store app. `cargo test -- --ignored pin_commands_this_pc --nocapture`
+    #[test]
+    #[ignore]
+    fn pin_commands_this_pc() {
+        com();
+        for p in pins() {
+            let verbs: Vec<String> = unsafe {
+                let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(p.target.as_str()), None).unwrap();
+                let menu: IContextMenu = item.BindToHandler(None, &BHID_SFUIObject).unwrap();
+                let popup = CreatePopupMenu().unwrap();
+                let _ = menu.QueryContextMenu(popup, 0, 1, 0x7FFF, CMF_NORMAL);
+                (0..0x7FFEusize)
+                    .filter_map(|i| {
+                        let mut buf = [0u16; 64];
+                        menu.GetCommandString(i, GCS_VERBW, None, windows::core::PSTR(buf.as_mut_ptr() as _), 64).ok()?;
+                        let n = buf.iter().position(|&c| c == 0).unwrap_or(0);
+                        (n > 0).then(|| String::from_utf16_lossy(&buf[..n]))
+                    })
+                    .take(60)
+                    .collect()
+            };
+            println!("{} | unpin offered: {}", p.name, verbs.iter().any(|v| v == "taskbarunpin"));
+        }
+        let note = extra_pin(r"c:\windows\system32\notepad.exe").expect("exe pin");
+        let store = extra_pin("windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel");
+        println!("exe pin: {} (icon {}) | store pin: {:?}", note.name, !note.icon.is_empty(), store.map(|p| p.name));
     }
 
     #[test]

@@ -595,6 +595,13 @@ function appMenu(app: AppItem): Item[] {
     const label = app.windows.length > 1 ? "Close all windows" : "Close window";
     items.push({ text: label, action: () => app.windows.forEach((w) => invoke("close_window", { hwnd: w.hwnd })) });
   }
+  // Windows' own menu has these too (issue #26). Pinning lands in Pane only: Windows lets no program pin.
+  items.push({ item: "Separator" });
+  items.push(
+    app.pinned
+      ? { text: "Unpin from taskbar", action: () => invoke("unpin_app", { id: app.id }) }
+      : { text: "Pin to taskbar", action: () => invoke("pin_app", { id: app.id }) },
+  );
   return items;
 }
 
