@@ -544,47 +544,45 @@ body.no-tray .tray-zone {
 }
 
 /* Several windows: the line splits into two dashes (a mask, so the running/active colour stays). */
-/* Several windows: the line plus a small round dot beside it (▬ •), centred as a pair, in the line's colour.
-   It replaced a line cut in two by a mask, whose square inner ends looked broken (the user's ideas.md, 2026-11-25).
-   Geometry: a 3 px gap and a 3 px dot after the line; the line moves left by half of that. */
+/* Several windows: two pills of the same height, 3 px apart, centred as a pair (the user's ideas.md, 2026-11-25:
+   one line cut in two, then a line plus a dot, both looked odd). Not in front: two equal grey pills. In front: the
+   first is the accent line, longer; the second stays a short grey pill. Wants attention: both orange. */
 .app::before {
   content: "";
   position: absolute;
   bottom: 2px;
   left: 50%;
-  width: 3px;
+  width: 5px;
   height: 3px;
-  border-radius: 50%;
+  border-radius: 2px;
   background: var(--text-dim);
   opacity: 0;
-  transform: scale(0);
+  transform: scaleX(0);
   transition: opacity 0.2s var(--ease), transform 0.3s var(--spring), left 0.3s var(--spring), background-color 0.3s var(--ease);
   pointer-events: none;
 }
 
 .app.multi::before {
-  left: calc(50% + 3px);
+  left: calc(50% + 1.5px);
   opacity: 1;
   transform: none;
 }
 
 .app.multi::after {
-  transform: translateX(-6px);
+  width: 5px;
+  transform: translateX(-6.5px);
   transition: width 0.3s var(--spring), transform 0.3s var(--spring), background-color 0.3s var(--ease);
-}
-
-.app.multi.active::before,
-.app.multi.flashing::before {
-  left: calc(50% + 8px);
 }
 
 .app.multi.active::after,
 .app.multi.flashing::after {
-  transform: translateX(-11px);
+  width: 12px;
+  transform: translateX(-10px);
 }
 
-.app.multi.active::before {
-  background: var(--accent);
+.app.multi.active::before,
+.app.multi.flashing::before {
+  left: calc(50% + 5px);
 }
 
 .app.multi.flashing::before {
