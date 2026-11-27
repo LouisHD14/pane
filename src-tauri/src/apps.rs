@@ -375,14 +375,43 @@ pub fn taskband() -> isize {
     TASKBAND.load(SeqCst)
 }
 
+/// Badges an app hasn't sent again since the last announce(), and which announce() that was.
+static UNCONFIRMED: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+static ANNOUNCED: AtomicU32 = AtomicU32::new(0);
+
 /// Tells every taskbar window its button exists ("TaskbarButtonCreated", as Explorer does), so apps send their
-/// badges again, now to Pane. Done each time Pane is shown, like ManagedShell does at start.
+/// badges again, now to Pane. Done each time Pane is shown, like ManagedShell does at start, and whenever Explorer's
+/// tray window got in front of Pane's (tray.rs): badge changes in such a gap reached only Explorer. A badge the app
+/// doesn't send again within a second was cleared in the gap and goes (WhatsApp kept a read "2", 2026-11-27).
 pub fn announce() {
+    let had: Vec<isize> = lock(&BADGES).as_ref().map(|b| b.keys().copied().collect()).unwrap_or_default();
+    *lock(&UNCONFIRMED) = had;
+    let round = ANNOUNCED.fetch_add(1, SeqCst) + 1;
     let msg = unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) };
     for h in taskbar_hwnds() {
         unsafe {
             let _ = SendNotifyMessageW(h, msg, WPARAM(0), LPARAM(0));
         }
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(1));
+        if ANNOUNCED.load(SeqCst) == round {
+            drop_unconfirmed();
+        }
+    });
+}
+
+/// Forgets the badges no app confirmed since the last announce().
+fn drop_unconfirmed() {
+    let stale = std::mem::take(&mut *lock(&UNCONFIRMED));
+    let mut badges = lock(&BADGES);
+    let badges = badges.get_or_insert_with(HashMap::new);
+    let before = badges.len();
+    badges.retain(|h, _| !stale.contains(h));
+    let gone = badges.len() != before;
+    drop(badges);
+    if gone {
+        changed();
     }
 }
 
@@ -657,6 +686,7 @@ fn image_list(data: &[u8]) -> Vec<String> {
 }
 
 fn set_badge(hwnd: isize, change: impl FnOnce(&mut Badge)) {
+    lock(&UNCONFIRMED).retain(|&h| h != hwnd);
     let mut badges = lock(&BADGES);
     let badges = badges.get_or_insert_with(HashMap::new);
     let before = badges.get(&hwnd).cloned().unwrap_or_default();
@@ -1228,6 +1258,20 @@ mod tests {
         let items = group(&[], &[w], |_| ("Chat".into(), String::new()));
         let item = &items[0].windows[0];
         assert_eq!((item.badge.as_str(), item.badge_tip.as_str(), item.flashing), ("data:2", "1 new", true));
+    }
+
+    #[test]
+    fn badges_not_sent_again_are_dropped() {
+        let badge = |h| lock(&BADGES).as_ref().and_then(|b| b.get(&h).cloned());
+        set_badge(-21, |b| b.png = "data:kept".into());
+        set_badge(-22, |b| b.png = "data:stale".into());
+        // What announce() does: every badge is unconfirmed until its app sends it again.
+        lock(&UNCONFIRMED).extend([-21, -22]);
+        set_badge(-21, |b| b.png = "data:kept".into());
+        drop_unconfirmed();
+        assert!(badge(-21).is_some(), "sent again: stays");
+        assert_eq!(badge(-22), None, "cleared while Explorer got the message: goes");
+        set_badge(-21, |b| b.png = String::new());
     }
 
     /// Checks on this PC, without changing anything: Windows offers "taskbarunpin" on each real pin, and Pane pins
