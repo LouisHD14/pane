@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::{w, GUID, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::DeleteObject;
@@ -366,7 +366,7 @@ fn run(ready: Sender<isize>) {
         let _ = ready.send(hwnd.0 as isize);
         taskbar_created();
         if band != 0 {
-            apps::announce();
+            std::thread::spawn(apps::announce); // own thread: see TIMER_TOPMOST below
         }
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -409,6 +409,15 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_TIMER if wp.0 == TIMER_TOPMOST => {
                 if FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).ok() != Some(hwnd) {
                     let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    // Badge changes in the gap reached only Explorer: apps send theirs again (at most every 2 s).
+                    // Own thread: announce() reads window titles, which waits for the main thread, and stop() makes
+                    // the main thread wait for this one.
+                    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+                    let mut last = lock(&LAST);
+                    if apps::taskband() != 0 && last.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
+                        *last = Some(Instant::now());
+                        std::thread::spawn(apps::announce);
+                    }
                 }
                 LRESULT(0)
             }
